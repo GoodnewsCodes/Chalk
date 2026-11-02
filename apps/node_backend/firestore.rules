@@ -1,0 +1,296 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // 1. Core Security & Validation Helper Functions
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    // Enforces Google-only OAuth 2.0 authentication with verified email
+    function isGoogleAuthenticated() {
+      return isSignedIn()
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isGoogleAuthenticated() && request.auth.uid == userId;
+    }
+
+    function userProfileExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isLecturer() {
+      return isGoogleAuthenticated()
+        && userProfileExists()
+        && getUserProfile().role == 'lecturer';
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isOptionalString(data, field, maxLen) {
+      return !(field in data)
+        || data[field] == null
+        || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    // =========================================================================
+    // 2. Campus User Profiles: /users/{userId}
+    // =========================================================================
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'id',
+          'name',
+          'email',
+          'role',
+          'department',
+          'matricOrStaffId',
+          'avatarTag',
+          'isProfileComplete'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'name',
+          'email',
+          'role',
+          'department',
+          'matricOrStaffId',
+          'avatarTag',
+          'isProfileComplete',
+          'photoURL',
+          'provider',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id == userId
+        && isValidString(data.name, 1, 64)
+        && isValidString(data.email, 3, 120)
+        && data.email == request.auth.token.email
+        && (data.role == 'student' || data.role == 'lecturer')
+        && isValidString(data.department, 1, 100)
+        && isValidString(data.matricOrStaffId, 1, 40)
+        && isValidString(data.avatarTag, 1, 4)
+        && data.isProfileComplete is bool
+        && isOptionalString(data, 'photoURL', 500)
+        && isOptionalString(data, 'provider', 32)
+        && isOptionalString(data, 'createdAt', 40)
+        && isOptionalString(data, 'updatedAt', 40);
+    }
+
+    match /users/{userId} {
+      // Only Google-authenticated users can read profiles
+      allow get: if isOwner(userId) || isGoogleAuthenticated();
+      allow list: if isGoogleAuthenticated();
+
+      // Users can only create or update their own profile document, and email must match token
+      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+      allow update: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+
+      // Client-side profile deletion is prohibited
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 3. Courses Catalog: /courses/{courseId}
+    // =========================================================================
+
+    function isValidCourse(data, courseId) {
+      return data.keys().hasAll([
+          'id',
+          'code',
+          'title',
+          'lecturerName',
+          'lecturerId',
+          'accentHex',
+          'hasLiveSession',
+          'liveRoomCode',
+          'enrolledCount',
+          'scheduleTime',
+          'department'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'code',
+          'title',
+          'lecturerName',
+          'lecturerId',
+          'accentHex',
+          'hasLiveSession',
+          'liveRoomCode',
+          'enrolledCount',
+          'scheduleTime',
+          'department',
+          'updatedAt'
+        ])
+        && data.id == courseId
+        && isValidString(data.code, 1, 20)
+        && isValidString(data.title, 1, 120)
+        && isValidString(data.lecturerName, 1, 64)
+        && isValidString(data.lecturerId, 1, 64)
+        && isValidString(data.accentHex, 4, 9)
+        && data.hasLiveSession is bool
+        && isValidString(data.liveRoomCode, 1, 64)
+        && data.enrolledCount is number
+        && data.enrolledCount >= 0
+        && data.enrolledCount <= 100000
+        && isValidString(data.scheduleTime, 1, 80)
+        && isValidString(data.department, 1, 100)
+        && isOptionalString(data, 'updatedAt', 40);
+    }
+
+    match /courses/{courseId} {
+      allow read: if isGoogleAuthenticated();
+      allow create, update: if isGoogleAuthenticated() && isValidCourse(request.resource.data, courseId);
+      allow delete: if isLecturer() && resource.data.lecturerId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // 4. Course Announcements: /announcements/{announcementId}
+    // =========================================================================
+
+    function isValidAnnouncement(data, announcementId) {
+      return data.keys().hasAll([
+          'id',
+          'courseId',
+          'authorName',
+          'authorRole',
+          'timestamp',
+          'content'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'courseId',
+          'authorName',
+          'authorRole',
+          'timestamp',
+          'content',
+          'isLiveNotice',
+          'createdAtIso'
+        ])
+        && data.id == announcementId
+        && isValidString(data.courseId, 1, 64)
+        && isValidString(data.authorName, 1, 64)
+        && (data.authorRole == 'lecturer' || data.authorRole == 'ta' || data.authorRole == 'student')
+        && isValidString(data.timestamp, 1, 40)
+        && isValidString(data.content, 1, 1000)
+        && (!('isLiveNotice' in data) || data.isLiveNotice is bool)
+        && isOptionalString(data, 'createdAtIso', 40);
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if isGoogleAuthenticated();
+      allow create, update: if isGoogleAuthenticated() && isValidAnnouncement(request.resource.data, announcementId);
+      allow delete: if isLecturer();
+    }
+
+    // =========================================================================
+    // 5. Classwork Assignments & Submissions: /assignments/{assignmentId}
+    // =========================================================================
+
+    function isValidAssignment(data, assignmentId) {
+      return data.keys().hasAll([
+          'id',
+          'courseId',
+          'title',
+          'dueDate',
+          'description',
+          'isSubmitted',
+          'points'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'courseId',
+          'title',
+          'dueDate',
+          'description',
+          'isSubmitted',
+          'points',
+          'submissionNote',
+          'submittedBy',
+          'submittedAt',
+          'updatedAt'
+        ])
+        && data.id == assignmentId
+        && isValidString(data.courseId, 1, 64)
+        && isValidString(data.title, 1, 140)
+        && isValidString(data.dueDate, 1, 64)
+        && isValidString(data.description, 1, 2000)
+        && data.isSubmitted is bool
+        && isValidString(data.points, 1, 24)
+        && isOptionalString(data, 'submissionNote', 1000)
+        && isOptionalString(data, 'submittedBy', 64)
+        && isOptionalString(data, 'submittedAt', 40)
+        && isOptionalString(data, 'updatedAt', 40);
+    }
+
+    function isValidStudentSubmissionUpdate() {
+      // Students may only update submission fields without altering core assignment metadata
+      return request.resource.data.id == resource.data.id
+        && request.resource.data.courseId == resource.data.courseId
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.description == resource.data.description
+        && request.resource.data.points == resource.data.points
+        && isValidAssignment(request.resource.data, resource.data.id);
+    }
+
+    match /assignments/{assignmentId} {
+      allow read: if isGoogleAuthenticated();
+      allow create: if isGoogleAuthenticated() && isValidAssignment(request.resource.data, assignmentId);
+      allow update: if isGoogleAuthenticated()
+        && (isLecturer() || isValidStudentSubmissionUpdate());
+      allow delete: if isLecturer();
+    }
+
+    // =========================================================================
+    // 6. Live Vector Chalkboard Rooms: /rooms/{roomId}
+    // =========================================================================
+
+    function isValidRoomState(data) {
+      return (('roomId' in data && isValidString(data.roomId, 1, 64))
+          || ('id' in data && isValidString(data.id, 1, 64)))
+        && (!('activeSlideIndex' in data)
+            || (data.activeSlideIndex is int && data.activeSlideIndex >= 0 && data.activeSlideIndex <= 50))
+        && (!('strokes' in data)
+            || (data.strokes is list && data.strokes.size() <= 2500))
+        && isOptionalString(data, 'updatedAt', 40)
+        && isOptionalString(data, 'lastSyncedAt', 40);
+    }
+
+    match /rooms/{roomId} {
+      // Google-authenticated users can read all rooms; public sample room is readable for "Try a Live Class"
+      allow read: if isGoogleAuthenticated() || roomId == 'csc401_algo' || roomId == 'csc401-algo';
+      allow create, update: if isGoogleAuthenticated() && isValidRoomState(request.resource.data);
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 7. Vector DVR Replays: /replays/{replayId}
+    // =========================================================================
+
+    match /replays/{replayId} {
+      allow read: if isGoogleAuthenticated();
+      allow create, update, delete: if isLecturer();
+    }
+
+    // =========================================================================
+    // 8. Default Deny Catch-All Rule
+    // =========================================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
