@@ -33,19 +33,16 @@ export const ClassroomHubPage: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
 
   const [joinCodeInput, setJoinCodeInput] = useState('');
-  const [newCode, setNewCode] = useState('CSC 412');
-  const [newTitle, setNewTitle] = useState('Compiler Construction & Optimization');
-  const [newSchedule, setNewSchedule] = useState('Wed & Fri • 1:00 PM WAT');
+  const [newCode, setNewCode] = useState('');
+  const [newTitle, setNewTitle] = useState('');
+  const [newSchedule, setNewSchedule] = useState('');
 
   const isCourseLive = (course: (typeof courses)[0]) => {
-    return (
-      course.hasLiveSession ||
-      liveRooms.some(
-        (r) =>
-          r.id.toLowerCase() === course.liveRoomCode.toLowerCase() ||
-          r.courseId === course.id ||
-          r.courseCode.toLowerCase() === course.code.toLowerCase()
-      )
+    return liveRooms.some(
+      (r) =>
+        r.id.toLowerCase() === course.liveRoomCode.toLowerCase() ||
+        (r.courseId && r.courseId.toLowerCase() === course.id.toLowerCase()) ||
+        r.courseCode.toLowerCase() === course.code.toLowerCase()
     );
   };
 
@@ -183,42 +180,130 @@ export const ClassroomHubPage: React.FC = () => {
               }`}
           >
             <span className="w-2 h-2 rounded-full bg-[#69DB7C]" />
-            <span>Live Sessions ({courses.filter((c) => c.hasLiveSession).length})</span>
+            <span>Live Sessions ({courses.filter(isCourseLive).length})</span>
           </button>
         </div>
       </div>
 
       {/* Courses Grid */}
-      {filteredCourses.length === 0 ? (
+      {courses.length === 0 ? (
         <div
-          className={`p-10 rounded-3xl border text-center space-y-3 ${isDark
-            ? 'bg-[#141E19] border-[#3C4043]'
-            : 'bg-[#F8F9FA] border-[#DADCE0]'
+          className={`p-10 sm:p-14 rounded-3xl border text-center space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
             }`}
         >
-          <p className="font-display text-base font-medium">
-            No matching courses found
-          </p>
-          <p
-            className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-              }`}
-          >
-            Try clearing your search filter or join a class using a room code.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setSearchQuery('');
-              setFilterMode('all');
-            }}
-            className={`btn-google px-4 py-2 rounded-full text-xs font-medium cursor-pointer ${isDark
-              ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-              : 'bg-[#059669] text-white hover:bg-[#047857]'
-              }`}
-          >
-            Reset Filters
-          </button>
+          <div className="space-y-1">
+            <h2 className="font-display text-lg sm:text-xl font-medium">
+              No Enrolled Classes Yet
+            </h2>
+            <p
+              className={`text-xs sm:text-sm max-w-md mx-auto ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                }`}
+            >
+              You haven't joined or created any courses yet. Join a class with a code or create your own to begin teaching.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowJoinModal(true)}
+              className={`btn-google flex gap-2 px-6 py-2.5 rounded-full border text-xs font-medium cursor-pointer ${isDark
+                ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                : 'border-[#DADCE0] text-[#202124] hover:bg-white'
+                }`}
+            >
+              <Hash size={16} weight="regular" />
+              <span>Join with Code</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className={`btn-google px-5 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-2 cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
+            >
+              <Plus size={16} weight="bold" />
+              <span>Create a Class</span>
+            </button>
+          </div>
         </div>
+      ) : filteredCourses.length === 0 ? (
+        filterMode === 'live' ? (
+          <div
+            className={`p-10 sm:p-14 rounded-3xl border text-center space-y-4 ${isDark
+              ? 'bg-[#141E19] border-[#3C4043]'
+              : 'bg-[#F8F9FA] border-[#DADCE0]'
+              }`}
+          >
+            <div className="w-14 h-14 mx-auto rounded-full bg-[#69DB7C]/15 border border-[#69DB7C]/30 flex items-center justify-center text-[#69DB7C]">
+              <Broadcast size={28} weight="regular" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="font-display text-lg sm:text-xl font-medium">
+                No Live Meetings Right Now
+              </h2>
+              <p
+                className={`text-xs sm:text-sm max-w-md mx-auto ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                  }`}
+              >
+                None of your enrolled courses currently have an active live meeting. You can start a new instant meeting or view all enrolled classes.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => navigate('/meet')}
+                className={`btn-google px-5 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-2 cursor-pointer ${isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+                  }`}
+              >
+                <VideoCamera size={16} weight="regular" />
+                <span>Start Instant Meeting</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterMode('all')}
+                className={`btn-google px-4 py-2.5 rounded-full border text-xs font-medium cursor-pointer ${isDark
+                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                  : 'border-[#DADCE0] text-[#202124] hover:bg-white'
+                  }`}
+              >
+                View All Courses ({courses.length})
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className={`p-10 rounded-3xl border text-center space-y-3 ${isDark
+              ? 'bg-[#141E19] border-[#3C4043]'
+              : 'bg-[#F8F9FA] border-[#DADCE0]'
+              }`}
+          >
+            <p className="font-display text-base font-medium">
+              No matching courses found
+            </p>
+            <p
+              className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                }`}
+            >
+              Try clearing your search filter or join a class using a room code.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setFilterMode('all');
+              }}
+              className={`btn-google px-4 py-2 rounded-full text-xs font-medium cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
+            >
+              Reset Filters
+            </button>
+          </div>
+        )
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {filteredCourses.map((course) => (
@@ -435,6 +520,7 @@ export const ClassroomHubPage: React.FC = () => {
                 <input
                   id="new-course-code"
                   type="text"
+                  placeholder="e.g. CSC 412"
                   value={newCode}
                   onChange={(e) => setNewCode(e.target.value)}
                   className={`w-full px-3.5 py-2 rounded-xl border font-mono text-sm ${isDark
@@ -454,6 +540,7 @@ export const ClassroomHubPage: React.FC = () => {
                 <input
                   id="new-course-title"
                   type="text"
+                  placeholder="e.g. Compiler Construction & Optimization"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm ${isDark
@@ -473,6 +560,7 @@ export const ClassroomHubPage: React.FC = () => {
                 <input
                   id="new-course-schedule"
                   type="text"
+                  placeholder="e.g. Wed & Fri • 1:00 PM WAT"
                   value={newSchedule}
                   onChange={(e) => setNewSchedule(e.target.value)}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm ${isDark

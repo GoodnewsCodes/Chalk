@@ -14,7 +14,6 @@ import {
   Trash,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
-import { STUDY_QUIZ_QUESTIONS } from '../data/mockCatalog';
 import { QuizModel, QuizQuestionModel } from '../types/chalk';
 import { getCurrentFirebaseIdToken } from '../lib/firebase';
 
@@ -22,8 +21,14 @@ export const StudyHubPage: React.FC = () => {
   const { isDark, courses, currentUser } = useApp();
   const [activeTab, setActiveTab] = useState<'notes' | 'quiz'>('notes');
   const [selectedCourseId, setSelectedCourseId] = useState<string>(
-    courses[0]?.id || 'csc401'
+    courses[0]?.id || ''
   );
+
+  useEffect(() => {
+    if (!selectedCourseId && courses.length > 0) {
+      setSelectedCourseId(courses[0].id);
+    }
+  }, [courses, selectedCourseId]);
 
   // Notes state
   const [notesContent, setNotesContent] = useState<string>('');
@@ -64,6 +69,11 @@ export const StudyHubPage: React.FC = () => {
   // Fetch course notes from backend
   useEffect(() => {
     let active = true;
+    if (!selectedCourseId) {
+      setNotesContent('');
+      setNotesLoaded(true);
+      return;
+    }
     setNotesLoaded(false);
 
     (async () => {
@@ -107,9 +117,12 @@ export const StudyHubPage: React.FC = () => {
         const json = await res.json();
         if (Array.isArray(json.quizzes) && json.quizzes.length > 0) {
           setQuizzes(json.quizzes);
-          if (!activeQuizId) {
+          if (!activeQuizId || !json.quizzes.some((q: any) => q.id === activeQuizId)) {
             setActiveQuizId(json.quizzes[0].id);
           }
+        } else {
+          setQuizzes([]);
+          setActiveQuizId(null);
         }
       }
     } catch {
@@ -123,6 +136,7 @@ export const StudyHubPage: React.FC = () => {
 
   // Save notes
   const handleSaveNotes = async () => {
+    if (!selectedCourseId) return;
     setIsSavingNotes(true);
     try {
       const headers = await getAuthHeaders();
@@ -146,15 +160,12 @@ export const StudyHubPage: React.FC = () => {
 
   // Resolve questions for the currently selected quiz
   const currentQuiz = quizzes.find((q) => q.id === activeQuizId);
-  const quizQuestions: QuizQuestionModel[] =
-    currentQuiz?.questions && currentQuiz.questions.length > 0
-      ? currentQuiz.questions
-      : STUDY_QUIZ_QUESTIONS;
+  const quizQuestions: QuizQuestionModel[] = currentQuiz?.questions || [];
 
-  const currentQuestion = quizQuestions[currentIdx] || quizQuestions[0];
+  const currentQuestion = quizQuestions[currentIdx] || null;
 
   const handleSubmitAnswer = async () => {
-    if (selectedOption === null) return;
+    if (selectedOption === null || !currentQuestion) return;
     setSubmitted(true);
 
     const qId = String(currentQuestion.id);
@@ -356,7 +367,7 @@ export const StudyHubPage: React.FC = () => {
             }`}
           >
             <Exam size={16} weight="regular" />
-            <span>Practice Quizzes ({quizzes.length || 1})</span>
+            <span>Practice Quizzes ({quizzes.length})</span>
           </button>
         </div>
       </div>
@@ -370,25 +381,35 @@ export const StudyHubPage: React.FC = () => {
           >
             Course:
           </label>
-          <select
-            id="study-course-select"
-            value={selectedCourseId}
-            onChange={(e) => {
-              setSelectedCourseId(e.target.value);
-              handleResetQuiz();
-            }}
-            className={`px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer ${
-              isDark
-                ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
-                : 'bg-white border-[#DADCE0] text-[#202124]'
-            }`}
-          >
-            {courses.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code}: {c.title}
-              </option>
-            ))}
-          </select>
+          {courses.length > 0 ? (
+            <select
+              id="study-course-select"
+              value={selectedCourseId}
+              onChange={(e) => {
+                setSelectedCourseId(e.target.value);
+                handleResetQuiz();
+              }}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer ${
+                isDark
+                  ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
+                  : 'bg-white border-[#DADCE0] text-[#202124]'
+              }`}
+            >
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code}: {c.title}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span
+              className={`text-xs italic ${
+                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+              }`}
+            >
+              No enrolled courses yet
+            </span>
+          )}
         </div>
 
         {activeTab === 'quiz' && isLecturer && (
@@ -432,8 +453,8 @@ export const StudyHubPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSaveNotes}
-                disabled={isSavingNotes || !notesLoaded}
-                className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${
+                disabled={isSavingNotes || !notesLoaded || !selectedCourseId}
+                className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                   isDark
                     ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
                     : 'bg-[#059669] text-white hover:bg-[#047857]'
@@ -448,7 +469,12 @@ export const StudyHubPage: React.FC = () => {
               rows={14}
               value={notesContent}
               onChange={(e) => setNotesContent(e.target.value)}
-              placeholder="Record handwritten derivations, equations, and questions..."
+              placeholder={
+                selectedCourseId
+                  ? 'Record handwritten derivations, equations, and questions...'
+                  : 'Enroll in or create a course to start recording notes.'
+              }
+              disabled={!selectedCourseId}
               className={`w-full p-4 rounded-2xl border font-mono text-xs leading-relaxed focus:outline-none resize-y ${
                 isDark
                   ? 'bg-[#0F1713] border-[#3C4043] text-[#E3E3E3] focus:border-[#69DB7C]'
@@ -472,7 +498,11 @@ export const StudyHubPage: React.FC = () => {
               <ArrowRight size={15} weight="regular" />
             </button>
             <Link
-              to={`/meet/${courses.find((c) => c.id === selectedCourseId)?.liveRoomCode || 'csc401-algo'}`}
+              to={
+                courses.find((c) => c.id === selectedCourseId)?.liveRoomCode
+                  ? `/meet/${courses.find((c) => c.id === selectedCourseId)?.liveRoomCode}`
+                  : '/meet'
+              }
               className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 ${
                 isDark
                   ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
@@ -482,6 +512,64 @@ export const StudyHubPage: React.FC = () => {
               <VideoCamera size={16} weight="regular" />
               <span>Enter Live Room</span>
             </Link>
+          </div>
+        </div>
+      ) : quizQuestions.length === 0 ? (
+        /* Empty State: No quizzes authored */
+        <div
+          className={`max-w-xl mx-auto p-8 sm:p-12 rounded-3xl border text-center space-y-4 ${
+            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+          }`}
+        >
+          <div
+            className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto border ${
+              isDark
+                ? 'bg-[#69DB7C]/10 border-[#69DB7C]/30 text-[#69DB7C]'
+                : 'bg-[#ECFDF5] border-[#059669]/30 text-[#059669]'
+            }`}
+          >
+            <Exam size={32} weight="regular" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="font-display text-xl font-medium tracking-tight">
+              No quizzes authored by lecturer yet
+            </h2>
+            <p
+              className={`text-xs max-w-md mx-auto ${
+                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+              }`}
+            >
+              Assessment quizzes for this course will appear here once authored by the course lecturer.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            {isLecturer ? (
+              <button
+                type="button"
+                onClick={() => setShowCreateQuizModal(true)}
+                className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
+                  isDark
+                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                    : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
+              >
+                <Plus size={16} weight="bold" />
+                <span>Create First Quiz</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setActiveTab('notes')}
+                className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
+                  isDark
+                    ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                    : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
+                }`}
+              >
+                <BookOpenText size={16} weight="regular" />
+                <span>Return to Lesson Notes</span>
+              </button>
+            )}
           </div>
         </div>
       ) : completed ? (
@@ -529,7 +617,7 @@ export const StudyHubPage: React.FC = () => {
               <span>Retry Quiz</span>
             </button>
             <Link
-              to={`/hub/course/${selectedCourseId}`}
+              to={selectedCourseId ? `/hub/course/${selectedCourseId}` : '/hub'}
               className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs ${
                 isDark
                   ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'

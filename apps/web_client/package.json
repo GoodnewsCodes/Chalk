@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.24",
     "@phosphor-icons/react": "^2.1.7",
     "firebase": "^13.1.0",
+    "livekit-client": "^2.23.0",
     "motion": "^12.4.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

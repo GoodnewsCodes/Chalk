@@ -127,7 +127,7 @@ export interface ChatMessage {
 
 export interface DvrChapter {
   timestampMs?: number;
-  timeMs?: number;
+  timeMs?: number; // compat alias
   title?: string;
   label?: string;
   slideIndex: number;

@@ -40,6 +40,9 @@ import {
   subscribeToFirebaseAuth,
   subscribeToFirestoreCatalog,
   subscribeToFirestoreRoom,
+  MOCK_COURSE_IDS,
+  MOCK_ANNOUNCEMENT_IDS,
+  MOCK_ASSIGNMENT_IDS,
 } from '../lib/firebase';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
@@ -112,6 +115,13 @@ interface AppContextValue {
   refreshCourses: () => Promise<void>;
   addAnnouncement: (courseId: string, content: string, isLiveNotice?: boolean) => void;
   submitAssignment: (assignmentId: string, note: string) => void;
+  createAssignment: (params: {
+    courseId: string;
+    title: string;
+    description: string;
+    dueDate?: string;
+    points?: string;
+  }) => Promise<ClassworkAssignment>;
   joinCourseByCode: (code: string) => Promise<CourseModel | null>;
   createCourse: (params: {
     code: string;
@@ -181,9 +191,9 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 
 const STORAGE_USER_KEY = 'chalk_web_user_v2';
 const STORAGE_THEME_KEY = 'chalk_web_theme_pref_v2';
-const STORAGE_COURSES_KEY = 'chalk_firestore_cache_courses_v1';
-const STORAGE_ANNOUNCEMENTS_KEY = 'chalk_firestore_cache_announcements_v1';
-const STORAGE_ASSIGNMENTS_KEY = 'chalk_firestore_cache_assignments_v1';
+const STORAGE_COURSES_KEY = 'chalk_firestore_cache_courses_v4';
+const STORAGE_ANNOUNCEMENTS_KEY = 'chalk_firestore_cache_announcements_v4';
+const STORAGE_ASSIGNMENTS_KEY = 'chalk_firestore_cache_assignments_v4';
 const BACKEND_API_BASE = 'http://localhost:4000';
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -272,7 +282,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [courses, setCourses] = useState<CourseModel[]>(() => {
     try {
       const cached = localStorage.getItem(STORAGE_COURSES_KEY);
-      if (cached) return JSON.parse(cached);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((c) => c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id));
+        }
+      }
     } catch {
       // ignore
     }
@@ -282,7 +297,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [announcements, setAnnouncements] = useState<CourseAnnouncement[]>(() => {
     try {
       const cached = localStorage.getItem(STORAGE_ANNOUNCEMENTS_KEY);
-      if (cached) return JSON.parse(cached);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (a) =>
+              a &&
+              typeof a.id === 'string' &&
+              !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+              typeof a.courseId === 'string' &&
+              !MOCK_COURSE_IDS.has(a.courseId)
+          );
+        }
+      }
     } catch {
       // ignore
     }
@@ -292,7 +319,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [assignments, setAssignments] = useState<ClassworkAssignment[]>(() => {
     try {
       const cached = localStorage.getItem(STORAGE_ASSIGNMENTS_KEY);
-      if (cached) return JSON.parse(cached);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (a) =>
+              a &&
+              typeof a.id === 'string' &&
+              !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+              typeof a.courseId === 'string' &&
+              !MOCK_COURSE_IDS.has(a.courseId)
+          );
+        }
+      }
     } catch {
       // ignore
     }
@@ -300,6 +339,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [liveRooms, setLiveRooms] = useState<LiveRoomSummary[]>([]);
+
+  // Purge legacy cache versions from localStorage
+  useEffect(() => {
+    try {
+      ['v1', 'v2', 'v3'].forEach((ver) => {
+        localStorage.removeItem(`chalk_firestore_cache_courses_${ver}`);
+        localStorage.removeItem(`chalk_firestore_cache_announcements_${ver}`);
+        localStorage.removeItem(`chalk_firestore_cache_assignments_${ver}`);
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_COURSES_KEY, JSON.stringify(courses));
@@ -421,14 +473,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncWithBackendApi('/api/announcements', 'GET', undefined, currentUser),
       syncWithBackendApi('/api/assignments', 'GET', undefined, currentUser),
     ]);
-    if (Array.isArray(coursesRes?.courses) && coursesRes.courses.length > 0) {
-      setCourses(coursesRes.courses);
+    if (Array.isArray(coursesRes?.courses)) {
+      setCourses(
+        coursesRes.courses.filter(
+          (c: any) => c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id)
+        )
+      );
     }
-    if (Array.isArray(annRes?.announcements) && annRes.announcements.length > 0) {
-      setAnnouncements(annRes.announcements);
+    if (Array.isArray(annRes?.announcements)) {
+      setAnnouncements(
+        annRes.announcements.filter(
+          (a: any) =>
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId)
+        )
+      );
     }
-    if (Array.isArray(asgnRes?.assignments) && asgnRes.assignments.length > 0) {
-      setAssignments(asgnRes.assignments);
+    if (Array.isArray(asgnRes?.assignments)) {
+      setAssignments(
+        asgnRes.assignments.filter(
+          (a: any) =>
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId)
+        )
+      );
     }
   }, [currentUser?.id]);
 
@@ -460,22 +534,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Classroom & Meeting State
-  const [activeRoomCode, setActiveRoomCodeState] = useState<string>('csc401-algo');
+  const [activeRoomCode, setActiveRoomCodeState] = useState<string>('');
   const [activeRoomInfo, setActiveRoomInfo] = useState<ActiveRoomMeta>({
-    roomId: 'csc401-algo',
-    title: 'Algorithms & Data Structures (Crisis Remote Cohort)',
-    courseCode: 'CSC 401',
-    courseId: 'csc401',
-    lecturerName: 'Prof. Adeleke O.',
+    roomId: '',
+    title: '',
+    courseCode: '',
+    courseId: null,
+    lecturerName: '',
     isLive: false,
     participantCount: 0,
   });
 
   const setActiveRoomCode = (code: string) => {
     const cleaned = code.trim();
-    if (cleaned) {
-      setActiveRoomCodeState(cleaned);
-    }
+    setActiveRoomCodeState(cleaned);
   };
 
   const [socketConnected, setSocketConnected] = useState<boolean>(false);
@@ -494,7 +566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [speakingMap, setSpeakingMap] = useState<Record<string, boolean>>({});
 
   // Drawing & Vector Canvas
-  const [strokes, setStrokes] = useState<StrokeData[]>(DEFAULT_BOARD_STROKES);
+  const [strokes, setStrokes] = useState<StrokeData[]>([]);
   const [redoStack, setRedoStack] = useState<StrokeData[]>([]);
   const [currentTool, setCurrentTool] = useState<StrokeTool>('pen');
   const [currentColor, setCurrentColor] = useState<string>('#69DB7C');
@@ -609,6 +681,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Initialize Socket.io connection for Live Meeting
   useEffect(() => {
+    if (!activeRoomCode) {
+      setSocketConnected(false);
+      setParticipants([]);
+      return;
+    }
+
     const socket = io('http://localhost:4000', {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
@@ -663,7 +741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSelfSocketId(snapshot.selfSocketId);
       }
       if (Array.isArray(snapshot.strokes)) {
-        setStrokes(snapshot.strokes.length ? snapshot.strokes : DEFAULT_BOARD_STROKES);
+        setStrokes(snapshot.strokes.length ? snapshot.strokes : (snapshot.roomId === 'csc401-algo' ? DEFAULT_BOARD_STROKES : []));
       }
       if (typeof snapshot.activeSlideIndex === 'number') {
         setActiveSlideIndex(snapshot.activeSlideIndex);
@@ -785,7 +863,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     return () => {
-      socket.emit('leave_room', { roomId: activeRoomCode });
+      if (activeRoomCode) {
+        socket.emit('leave_room', { roomId: activeRoomCode });
+      }
       socket.disconnect();
       peerConnectionsRef.current.forEach((pc) => pc.close());
       peerConnectionsRef.current.clear();
@@ -1144,13 +1224,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Course management helpers
   const joinCourseByCode = async (code: string): Promise<CourseModel | null> => {
     const normalized = code.trim().toLowerCase();
+    const studentMember = currentUser
+      ? {
+          id: currentUser.id,
+          name: currentUser.name,
+          avatarTag: currentUser.avatarTag,
+          role: currentUser.role,
+          matricOrStaffId: currentUser.matricOrStaffId,
+        }
+      : {
+          id: `guest_${Date.now()}`,
+          name: guestName || 'Campus Student',
+          avatarTag: 'GS',
+          role: 'student' as const,
+          matricOrStaffId: 'GUEST/STUDENT',
+        };
+
     const existing = courses.find(
       (c) =>
         c.id.toLowerCase() === normalized ||
         c.code.toLowerCase().replace(/\s+/g, '') === normalized.replace(/\s+/g, '') ||
         c.liveRoomCode.toLowerCase() === normalized
     );
-    if (existing) return existing;
+
+    if (existing) {
+      setCourses((prev) =>
+        prev.map((c) => {
+          if (c.id === existing.id) {
+            const currentMembers = c.members || [];
+            const alreadyMember = currentMembers.some((m) => m.id === studentMember.id);
+            if (!alreadyMember) {
+              const updatedMembers = [...currentMembers, studentMember];
+              return {
+                ...c,
+                members: updatedMembers,
+                enrolledCount: Math.max(c.enrolledCount + 1, updatedMembers.length),
+              };
+            }
+          }
+          return c;
+        })
+      );
+      syncWithBackendApi('/api/courses/join', 'POST', { code });
+      return existing;
+    }
 
     const res = await syncWithBackendApi('/api/courses/join', 'POST', { code });
     if (res?.course) {
@@ -1170,6 +1287,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       enrolledCount: 1,
       scheduleTime: 'Live Session Ready',
       department: currentUser?.department || 'Computer Science & Engineering',
+      members: [studentMember],
     };
     setCourses((prev) => [fallback, ...prev]);
     saveCourseToFirestore(fallback).catch(() => {});
@@ -1188,6 +1306,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     department: string;
   }): Promise<CourseModel> => {
     const slug = code.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const lecturerMember = {
+      id: currentUser?.id || 'usr_lecturer_01',
+      name: currentUser?.name || 'Prof. Lecturer',
+      avatarTag: currentUser?.avatarTag || 'PL',
+      role: 'lecturer' as const,
+      matricOrStaffId: currentUser?.matricOrStaffId || 'STAFF/CS/2026',
+    };
+
     const res = await syncWithBackendApi('/api/courses', 'POST', {
       code,
       title,
@@ -1211,6 +1337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       enrolledCount: 1,
       scheduleTime: scheduleTime || 'Mon & Wed • 9:00 AM WAT',
       department: department || 'Computer Science & Engineering',
+      members: [lecturerMember],
     };
     setCourses((prev) => [newCourse, ...prev]);
     saveCourseToFirestore(newCourse).catch(() => {});
@@ -1251,6 +1378,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     saveAssignmentSubmissionToFirestore(assignmentId, note, currentUser?.id).catch(() => {});
     syncWithBackendApi(`/api/assignments/${assignmentId}/submit`, 'POST', { note });
+  };
+
+  const createAssignment = async ({
+    courseId,
+    title,
+    description,
+    dueDate,
+    points,
+  }: {
+    courseId: string;
+    title: string;
+    description: string;
+    dueDate?: string;
+    points?: string;
+  }): Promise<ClassworkAssignment> => {
+    const newAsg: ClassworkAssignment = {
+      id: `asg_${Date.now()}`,
+      courseId,
+      title,
+      description,
+      dueDate: dueDate || 'Due next week',
+      points: points || '100 points',
+      isSubmitted: false,
+    };
+    setAssignments((prev) => [newAsg, ...prev]);
+    saveAssignmentSubmissionToFirestore(newAsg.id, '', currentUser?.id).catch(() => {});
+    syncWithBackendApi('/api/assignments', 'POST', {
+      id: newAsg.id,
+      courseId,
+      title,
+      description,
+      dueDate: newAsg.dueDate,
+      points: newAsg.points,
+    });
+    return newAsg;
   };
 
   const authenticateWithGoogle = async (): Promise<{
@@ -1397,6 +1559,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshCourses,
         addAnnouncement,
         submitAssignment,
+        createAssignment,
         joinCourseByCode,
         createCourse,
         activeRoomCode,

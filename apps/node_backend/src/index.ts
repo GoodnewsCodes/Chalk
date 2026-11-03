@@ -4,6 +4,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
+import { AccessToken } from 'livekit-server-sdk';
 import {
   ChatMessageRecord,
   DvrChapter,
@@ -481,6 +482,11 @@ const toCourseMember = (user: FirebaseUserPayload) => ({
 const notesDocId = (uid: string, courseId: string) =>
   `n${crypto.createHash('sha1').update(`${uid}|${courseId}`).digest('hex')}`;
 
+// LiveKit WebRTC SFU Configuration
+const LIVEKIT_URL = process.env.LIVEKIT_URL || 'ws://127.0.0.1:7880';
+const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
+
 // --- REST Endpoints ---
 
 app.get('/health', (_req, res) => {
@@ -493,10 +499,128 @@ app.get('/health', (_req, res) => {
       firestoreCatalog: true,
       meetings: true,
       webrtcSignaling: true,
+      livekit: true,
+    },
+    livekit: {
+      url: LIVEKIT_URL,
+      configured: Boolean(process.env.LIVEKIT_URL || process.env.LIVEKIT_API_KEY),
     },
     activeRooms: rooms.size,
     timestamp: new Date().toISOString(),
   });
+});
+
+// LiveKit WebRTC SFU Access Token & Configuration Endpoints
+app.get('/api/livekit/config', (_req, res) => {
+  res.json({
+    url: LIVEKIT_URL,
+    configured: Boolean(process.env.LIVEKIT_URL || process.env.LIVEKIT_API_KEY),
+  });
+});
+
+app.post('/api/livekit/token', strictMutationLimiter, async (req: Request, res: Response) => {
+  try {
+    const rawRoom = req.body?.roomName || req.body?.room || req.body?.roomId;
+    const roomName = sanitizeRoomOrEntityId(rawRoom) || 'default-room';
+
+    let identity = '';
+    let name = '';
+    let role: 'student' | 'lecturer' = 'student';
+    let avatarTag = '';
+
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7).trim();
+      const verified = await verifyFirebaseIdToken(token);
+      if (verified) {
+        identity = verified.uid;
+        name = verified.name || 'Campus User';
+        role = verified.role === 'lecturer' ? 'lecturer' : 'student';
+        avatarTag = verified.avatarTag || deriveInitials(name);
+      }
+    }
+
+    if (!identity) {
+      identity =
+        sanitizeRoomOrEntityId(req.body?.identity) ||
+        `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      name = sanitizeDisplayText(req.body?.name, 48) || 'Campus Guest';
+      role = req.body?.role === 'lecturer' ? 'lecturer' : 'student';
+      avatarTag = sanitizeDisplayText(req.body?.avatarTag, 4) || deriveInitials(name);
+    }
+
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+      identity,
+      name,
+      metadata: JSON.stringify({ role, avatarTag }),
+    });
+
+    at.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+
+    const jwtToken = await at.toJwt();
+
+    res.json({
+      success: true,
+      token: jwtToken,
+      url: LIVEKIT_URL,
+      roomName,
+      identity,
+      name,
+      role,
+      avatarTag,
+    });
+  } catch (err) {
+    console.error('[LiveKit Server] Error generating token:', err);
+    res.status(500).json({ error: 'Failed to generate LiveKit token' });
+  }
+});
+
+app.get('/api/livekit/token', async (req: Request, res: Response) => {
+  try {
+    const roomName = sanitizeRoomOrEntityId(req.query.room as string) || 'default-room';
+    const identity =
+      sanitizeRoomOrEntityId(req.query.identity as string) ||
+      `guest_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const name = sanitizeDisplayText(req.query.name as string, 48) || 'Campus Guest';
+    const role: 'student' | 'lecturer' = req.query.role === 'lecturer' ? 'lecturer' : 'student';
+    const avatarTag = sanitizeDisplayText(req.query.avatarTag as string, 4) || deriveInitials(name);
+
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+      identity,
+      name,
+      metadata: JSON.stringify({ role, avatarTag }),
+    });
+
+    at.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+
+    const jwtToken = await at.toJwt();
+
+    res.json({
+      success: true,
+      token: jwtToken,
+      url: LIVEKIT_URL,
+      roomName,
+      identity,
+      name,
+      role,
+      avatarTag,
+    });
+  } catch (err) {
+    console.error('[LiveKit Server] Error generating token:', err);
+    res.status(500).json({ error: 'Failed to generate LiveKit token' });
+  }
 });
 
 // 1. Firebase Google Auth Verification & User Provisioning Endpoint
@@ -579,9 +703,16 @@ app.post(
   }
 );
 
+const MOCK_COURSE_IDS = new Set(['csc401', 'mth301', 'cpe405', 'gen401']);
+const MOCK_ANN_IDS = new Set(['ann_1', 'ann_2', 'ann_3', 'ann_4']);
+const MOCK_ASG_IDS = new Set(['asg_1', 'asg_2', 'asg_3']);
+
 // 3. Protected Courses Endpoints (Firestore `courses/{id}`)
 app.get('/api/courses', requireFirebaseAuth, async (_req, res) => {
-  const courses = await listFirestoreCollection('courses');
+  const allCourses = await listFirestoreCollection('courses');
+  const courses = allCourses.filter(
+    (c) => typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id)
+  );
   res.json({ courses });
 });
 
@@ -689,7 +820,14 @@ app.post(
 
 // 4. Protected Announcements Endpoints (Firestore `announcements/{id}`)
 app.get('/api/announcements', requireFirebaseAuth, async (_req, res) => {
-  const announcements = await listFirestoreCollection('announcements');
+  const all = await listFirestoreCollection('announcements');
+  const announcements = all.filter(
+    (a) =>
+      typeof a.id === 'string' &&
+      !MOCK_ANN_IDS.has(a.id) &&
+      typeof a.courseId === 'string' &&
+      !MOCK_COURSE_IDS.has(a.courseId)
+  );
   res.json({ announcements });
 });
 
@@ -724,7 +862,14 @@ app.post(
 
 // 5. Protected Assignments Endpoints (Firestore `assignments/{id}`)
 app.get('/api/assignments', requireFirebaseAuth, async (_req, res) => {
-  const assignments = await listFirestoreCollection('assignments');
+  const all = await listFirestoreCollection('assignments');
+  const assignments = all.filter(
+    (a) =>
+      typeof a.id === 'string' &&
+      !MOCK_ASG_IDS.has(a.id) &&
+      typeof a.courseId === 'string' &&
+      !MOCK_COURSE_IDS.has(a.courseId)
+  );
   res.json({ assignments });
 });
 

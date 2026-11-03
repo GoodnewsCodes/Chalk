@@ -9,6 +9,8 @@ import {
   BookmarkSimple,
   BookOpenText,
   CheckCircle,
+  PlayCircle,
+  VideoCamera,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
 import { REPLAY_CATALOG } from '../data/mockCatalog';
@@ -21,10 +23,9 @@ export const ReplaysPage: React.FC = () => {
   const { isDark, currentUser } = useApp();
   const navigate = useNavigate();
 
-  const [replays, setReplays] = useState<DvrReplayItem[]>(REPLAY_CATALOG);
-  const [selectedReplay, setSelectedReplay] = useState<DvrReplayItem>(() => {
-    return REPLAY_CATALOG.find((r) => r.id === replayId) || REPLAY_CATALOG[0];
-  });
+  const [replays, setReplays] = useState<DvrReplayItem[]>([]);
+  const [selectedReplay, setSelectedReplay] = useState<DvrReplayItem | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
@@ -35,6 +36,7 @@ export const ReplaysPage: React.FC = () => {
   useEffect(() => {
     let active = true;
     const fetchList = async () => {
+      setIsLoading(true);
       try {
         const token = await getCurrentFirebaseIdToken();
         const headers: Record<string, string> = {};
@@ -46,50 +48,71 @@ export const ReplaysPage: React.FC = () => {
         const res = await fetch('http://localhost:4000/api/replays', { headers });
         if (res.ok) {
           const json = await res.json();
-          if (active && Array.isArray(json.replays) && json.replays.length > 0) {
-            const mapped: DvrReplayItem[] = json.replays.map((r: any) => ({
-              id: r.id,
-              roomId: r.roomId,
-              courseId: r.courseId,
-              courseCode: r.courseCode || 'CSC 401',
-              title: r.title,
-              lecturerName: r.lecturerName,
-              recordedAt: new Date(r.recordedAt).toLocaleDateString(),
-              durationMs: r.durationMs || 180000,
-              totalSizeKb: r.eventsSizeKb || 450,
-              mp4EquivalentMb: Math.max(12, Math.round(((r.durationMs || 180000) / 1000 / 60) * 12)),
-              savingsPercent: 97.4,
-              chapters: (r.chapters || []).map((ch: any) => ({
-                timeMs: ch.timestampMs,
-                timestampMs: ch.timestampMs,
-                label: ch.title || `Section ${ch.slideIndex + 1}`,
-                slideIndex: ch.slideIndex,
-              })),
-              events: [],
-            }));
-            setReplays([...mapped, ...REPLAY_CATALOG]);
+          if (active) {
+            if (Array.isArray(json.replays) && json.replays.length > 0) {
+              const mapped: DvrReplayItem[] = json.replays.map((r: any) => ({
+                id: r.id,
+                roomId: r.roomId,
+                courseId: r.courseId,
+                courseCode: r.courseCode || 'CSC 401',
+                title: r.title,
+                lecturerName: r.lecturerName,
+                recordedAt: new Date(r.recordedAt).toLocaleDateString(),
+                durationMs: r.durationMs || 180000,
+                totalSizeKb: r.eventsSizeKb || 450,
+                mp4EquivalentMb: Math.max(12, Math.round(((r.durationMs || 180000) / 1000 / 60) * 12)),
+                savingsPercent: 97.4,
+                chapters: (r.chapters || []).map((ch: any) => ({
+                  timeMs: ch.timestampMs,
+                  timestampMs: ch.timestampMs,
+                  label: ch.title || `Section ${ch.slideIndex + 1}`,
+                  slideIndex: ch.slideIndex,
+                })),
+                events: [],
+              }));
+              setReplays(mapped);
+              const match = mapped.find((m) => m.id === replayId) || mapped[0];
+              setSelectedReplay(match);
+            } else {
+              setReplays([]);
+              setSelectedReplay(null);
+            }
           }
+        } else if (active) {
+          setReplays([]);
+          setSelectedReplay(null);
         }
       } catch {
-        // fallback to catalog
+        if (active) {
+          setReplays([]);
+          setSelectedReplay(null);
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
       }
     };
     fetchList();
     return () => {
       active = false;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, replayId]);
 
   // Fetch specific recording full events if selected from server
   useEffect(() => {
     let active = true;
-    const targetId = replayId || replays[0]?.id;
+    const targetId = replayId || selectedReplay?.id || replays[0]?.id;
     if (!targetId) return;
 
-    // Check if it's in local catalog
+    // Check if it's already in local catalog or has full events
     const local = REPLAY_CATALOG.find((r) => r.id === targetId);
     if (local) {
       setSelectedReplay(local);
+      return;
+    }
+
+    if (selectedReplay && selectedReplay.id === targetId && selectedReplay.events && selectedReplay.events.length > 0) {
       return;
     }
 
@@ -146,7 +169,7 @@ export const ReplaysPage: React.FC = () => {
 
   // Timeline playback ticker
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying || !selectedReplay) return;
     const interval = setInterval(() => {
       setCurrentPositionMs((prev) => {
         const next = prev + 250 * playbackSpeed;
@@ -158,9 +181,9 @@ export const ReplaysPage: React.FC = () => {
       });
     }, 250);
     return () => clearInterval(interval);
-  }, [isPlaying, playbackSpeed, selectedReplay.durationMs]);
+  }, [isPlaying, playbackSpeed, selectedReplay]);
 
-  const activeStrokes = selectedReplay.events
+  const activeStrokes = (selectedReplay?.events || [])
     .filter((ev) => ev.t <= currentPositionMs && ev.stroke)
     .map((ev) => ev.stroke);
 
@@ -170,6 +193,116 @@ export const ReplaysPage: React.FC = () => {
     const sec = String(totalSec % 60).padStart(2, '0');
     return `${min}:${sec}`;
   };
+
+  const handleLoadDemo = () => {
+    setReplays(REPLAY_CATALOG);
+    setSelectedReplay(REPLAY_CATALOG[0]);
+    setCurrentPositionMs(15000);
+    setIsPlaying(true);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-8 sm:p-16 max-w-6xl mx-auto flex flex-col items-center justify-center space-y-3 min-h-[50vh]">
+        <div className="w-8 h-8 border-2 border-[#69DB7C] border-t-transparent rounded-full animate-spin" />
+        <p className="font-mono text-xs text-[#9AA0A6]">Checking Vector DVR archives...</p>
+      </div>
+    );
+  }
+
+  // Empty State when no recordings exist
+  if (!selectedReplay || replays.length === 0) {
+    return (
+      <div className="p-4 sm:p-6 lg:p-10 max-w-5xl mx-auto space-y-8">
+        <div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${
+                isDark
+                  ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
+                  : 'bg-[#ECFDF5] text-[#059669]'
+              }`}
+            >
+              Vector DVR Player
+            </span>
+          </div>
+          <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight mt-2">
+            Class Replay Library
+          </h1>
+          <p
+            className={`text-sm mt-1 ${
+              isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+            }`}
+          >
+            Offline lecture replay with synchronized Opus voice and low-bandwidth vector strokes.
+          </p>
+        </div>
+
+        <div
+          className={`p-10 sm:p-14 rounded-3xl border text-center space-y-5 ${
+            isDark
+              ? 'bg-[#141E19] border-[#3C4043]'
+              : 'bg-[#F8F9FA] border-[#DADCE0]'
+          }`}
+        >
+          <div className="w-16 h-16 mx-auto rounded-full bg-[#69DB7C]/15 border border-[#69DB7C]/30 flex items-center justify-center text-[#69DB7C]">
+            <PlayCircle size={34} weight="regular" />
+          </div>
+
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h2 className="font-display text-xl sm:text-2xl font-medium">
+              No Class Replays Yet
+            </h2>
+            <p
+              className={`text-xs sm:text-sm leading-relaxed ${
+                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+              }`}
+            >
+              Dual-track Vector DVR recordings are generated automatically once a live meeting or lecture concludes. Recordings save 97.6% of bandwidth by preserving vector stroke coordinates alongside 24 kbps audio.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => navigate('/meet')}
+              className={`btn-google px-5 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-2 cursor-pointer ${
+                isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+              }`}
+            >
+              <VideoCamera size={16} weight="regular" />
+              <span>Start a Meeting</span>
+            </button>
+
+            <Link
+              to="/hub"
+              className={`btn-google px-5 py-2.5 rounded-full border text-xs font-medium cursor-pointer ${
+                isDark
+                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                  : 'border-[#DADCE0] text-[#202124] hover:bg-white'
+              }`}
+            >
+              Browse Classroom Hub
+            </Link>
+
+            <button
+              type="button"
+              onClick={handleLoadDemo}
+              className={`btn-google px-4 py-2.5 rounded-full text-xs font-mono border border-dashed opacity-80 hover:opacity-100 cursor-pointer ${
+                isDark
+                  ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#69DB7C]'
+                  : 'border-[#DADCE0] text-[#5F6368] hover:text-[#059669]'
+              }`}
+            >
+              + Load Sample Replay
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-10 max-w-6xl mx-auto space-y-8">

@@ -57,10 +57,10 @@ export const AppShell: React.FC = () => {
   const calloutSubtitle = matchedCourse
     ? `${matchedCourse.code} • ${matchedCourse.lecturerName}`
     : matchedLiveRoom
-    ? `${matchedLiveRoom.courseCode || 'Live'} • ${matchedLiveRoom.lecturerName || 'Host'}`
-    : activeRoomInfo.lecturerName
-    ? `${activeRoomInfo.courseCode || 'Active'} • ${activeRoomInfo.lecturerName}`
-    : activeRoomCode;
+      ? `${matchedLiveRoom.courseCode || 'Live'} • ${matchedLiveRoom.lecturerName || 'Host'}`
+      : activeRoomInfo.lecturerName
+        ? `${activeRoomInfo.courseCode || 'Active'} • ${activeRoomInfo.lecturerName}`
+        : activeRoomCode;
 
   const liveRoomsCount = liveRooms.filter((r) => r.participantCount > 0).length;
 
@@ -73,11 +73,11 @@ export const AppShell: React.FC = () => {
       badge: `${courses.length}`,
     },
     {
-      to: `/meet/${activeRoomCode || 'csc401-algo'}`,
+      to: '/meet',
       label: 'Live Meet',
       shortLabel: 'Meet',
       icon: VideoCamera,
-      isLive: true,
+      isLive: liveRoomsCount > 0,
       badge: liveRoomsCount > 0 ? `${liveRoomsCount} LIVE` : undefined,
     },
     {
@@ -91,13 +91,6 @@ export const AppShell: React.FC = () => {
       label: 'Study Hub',
       shortLabel: 'Study',
       icon: BookOpenText,
-    },
-    {
-      to: '/benchmarks',
-      label: 'Telemetry Proof',
-      shortLabel: 'Data',
-      icon: ChartBar,
-      badge: `${savingsPercentage.toFixed(0)}%`,
     },
   ];
 
@@ -197,7 +190,7 @@ export const AppShell: React.FC = () => {
           </Link>
         </div>
 
-        {/* Active Session Callout Card */}
+        {/* Active Session Callout Card / Empty State */}
         <div className="px-3 pb-3">
           <div
             className={`rounded-3xl p-4 border ${isDark
@@ -205,35 +198,71 @@ export const AppShell: React.FC = () => {
               : 'bg-white border-[#DADCE0]'
               }`}
           >
-            <div className="flex items-center justify-between text-[11px] font-mono mb-1.5">
-              <span
-                className={`inline-flex items-center gap-1.5 font-medium ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
-                  }`}
-              >
-                <Broadcast size={14} weight="regular" />
-                <span>Active Room</span>
-              </span>
-              <span className={isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'}>
-                {currentBitrateKbps.toFixed(1)} kbps
-              </span>
-            </div>
-            <div className="text-sm font-medium truncate">{calloutTitle}</div>
-            <div
-              className={`text-xs truncate mb-3 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-                }`}
-            >
-              {calloutSubtitle} • {activeRoomCode}
-            </div>
-            <Link
-              to={`/meet/${activeRoomCode || 'csc401-algo'}`}
-              className={`btn-google w-full py-2 px-4 rounded-full text-xs font-medium flex items-center justify-center gap-1.5 ${isDark
-                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                : 'bg-[#059669] text-white hover:bg-[#047857]'
-                }`}
-            >
-              <VideoCamera size={15} weight="regular" />
-              <span>Join Live Meet</span>
-            </Link>
+            {liveRoomsCount > 0 && matchedLiveRoom ? (
+              <>
+                <div className="flex items-center justify-between text-[11px] font-mono mb-1.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 font-medium ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
+                      }`}
+                  >
+                    <Broadcast size={14} weight="regular" className="animate-pulse" />
+                    <span>Live Meeting</span>
+                  </span>
+                  <span className={isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'}>
+                    {currentBitrateKbps.toFixed(1)} kbps
+                  </span>
+                </div>
+                <div className="text-sm font-medium truncate">{calloutTitle}</div>
+                <div
+                  className={`text-xs truncate mb-3 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    }`}
+                >
+                  {calloutSubtitle} • {matchedLiveRoom.id}
+                </div>
+                <Link
+                  to={`/meet/${matchedLiveRoom.id}`}
+                  className={`btn-google w-full py-2 px-4 rounded-full text-xs font-medium flex items-center justify-center gap-1.5 ${isDark
+                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                    : 'bg-[#059669] text-white hover:bg-[#047857]'
+                    }`}
+                >
+                  <VideoCamera size={15} weight="regular" />
+                  <span>Join Live Meet ({matchedLiveRoom.participantCount})</span>
+                </Link>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-[11px] font-mono mb-1.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 font-medium ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                      }`}
+                  >
+                    <VideoCamera size={14} weight="regular" />
+                    <span>Chalk Meet</span>
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/5 font-mono text-[#69DB7C]">
+                    LiveKit WebRTC
+                  </span>
+                </div>
+                <div className="text-sm font-medium">No Active Meetings</div>
+                <div
+                  className={`text-xs truncate mb-3 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    }`}
+                >
+                  Start or enter a meeting code
+                </div>
+                <Link
+                  to="/meet"
+                  className={`btn-google w-full py-2 px-4 rounded-full text-xs font-medium flex items-center justify-center gap-1.5 ${isDark
+                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                    : 'bg-[#059669] text-white hover:bg-[#047857]'
+                    }`}
+                >
+                  <VideoCamera size={15} weight="regular" />
+                  <span>Start or Join Call</span>
+                </Link>
+              </>
+            )}
           </div>
         </div>
 
@@ -288,24 +317,10 @@ export const AppShell: React.FC = () => {
           className={`p-4 border-t space-y-3 ${isDark ? 'border-[#3C4043]/60' : 'border-[#DADCE0]'
             }`}
         >
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span
-              className={`inline-flex items-center gap-1.5 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-                }`}
-            >
-              <WifiHigh size={14} weight="regular" />
-              <span>Bandwidth reduction</span>
-            </span>
-            <span
-              className={`font-medium tabular-nums ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
-                }`}
-            >
-              {savingsPercentage.toFixed(1)}%
-            </span>
-          </div>
+
 
           {currentUser ? (
-            <div className="pt-2 border-t border-inherit flex items-center justify-between gap-2">
+            <div className="pt-2 flex items-center justify-between gap-2">
               <Link to="/auth" className="flex items-center gap-2.5 min-w-0 group">
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center font-mono font-medium text-xs shrink-0 ${isDark

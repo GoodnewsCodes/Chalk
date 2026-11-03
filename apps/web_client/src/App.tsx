@@ -49,7 +49,7 @@ export const App: React.FC = () => {
           {/* Standalone Full-Viewport Routes */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/auth" element={<AuthPage />} />
-          <Route path="/meet" element={<Navigate to="/meet/csc401-algo" replace />} />
+          <Route path="/meet" element={<MeetPage />} />
           <Route path="/meet/:roomCode" element={<MeetPage />} />
 
           {/* Protected Dashboard Routes (inaccessible without signing up / signing in) */}

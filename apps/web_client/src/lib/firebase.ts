@@ -400,32 +400,40 @@ export const getCurrentFirebaseIdToken = async (): Promise<string | null> => {
  * Seeds default courses, announcements, and assignments into Cloud Firestore
  * if the collections are empty on first connect.
  */
-export const ensureFirestoreSeedData = async (): Promise<void> => {
+export const MOCK_COURSE_IDS = new Set(['csc401', 'mth301', 'cpe405', 'gen401']);
+export const MOCK_ANNOUNCEMENT_IDS = new Set(['ann_1', 'ann_2', 'ann_3', 'ann_4']);
+export const MOCK_ASSIGNMENT_IDS = new Set(['asg_1', 'asg_2', 'asg_3']);
+
+/**
+ * Purges any previously seeded mock courses, announcements, or assignments from Cloud Firestore.
+ */
+export const purgeFirestoreMockSeedData = async (): Promise<void> => {
   const services = initFirebaseServices();
   if (!services || !firestoreReachable || !services.auth.currentUser) return;
 
   const { db } = services;
   try {
-    const coursesSnap = await withFirestoreTimeout(
-      getDocs(collection(db, 'courses')),
-      1800
-    );
-    if (coursesSnap && coursesSnap.empty) {
-      const batch = writeBatch(db);
-      for (const course of INITIAL_COURSES) {
-        batch.set(doc(db, 'courses', course.id), course);
-      }
-      for (const ann of INITIAL_ANNOUNCEMENTS) {
-        batch.set(doc(db, 'announcements', ann.id), ann);
-      }
-      for (const assign of INITIAL_ASSIGNMENTS) {
-        batch.set(doc(db, 'assignments', assign.id), assign);
-      }
-      await withFirestoreTimeout(batch.commit(), 1800);
+    const batch = writeBatch(db);
+    for (const id of MOCK_COURSE_IDS) {
+      batch.delete(doc(db, 'courses', id));
     }
+    for (const id of MOCK_ANNOUNCEMENT_IDS) {
+      batch.delete(doc(db, 'announcements', id));
+    }
+    for (const id of MOCK_ASSIGNMENT_IDS) {
+      batch.delete(doc(db, 'assignments', id));
+    }
+    await withFirestoreTimeout(batch.commit(), 3000);
   } catch {
-    firestoreReachable = false;
+    // ignore
   }
+};
+
+/**
+ * Ensures no mock data resides in Cloud Firestore.
+ */
+export const ensureFirestoreSeedData = async (): Promise<void> => {
+  await purgeFirestoreMockSeedData();
 };
 
 /**
@@ -446,10 +454,10 @@ export const subscribeToFirestoreCatalog = (callbacks: {
   const unsubCourses = onSnapshot(
     collection(db, 'courses'),
     (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map((d) => d.data() as CourseModel);
-        callbacks.onCourses(list);
-      }
+      const list = snap.docs
+        .map((d) => d.data() as CourseModel)
+        .filter((c) => c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id));
+      callbacks.onCourses(list);
     },
     () => {
       firestoreReachable = false;
@@ -459,10 +467,17 @@ export const subscribeToFirestoreCatalog = (callbacks: {
   const unsubAnnouncements = onSnapshot(
     collection(db, 'announcements'),
     (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map((d) => d.data() as CourseAnnouncement);
-        callbacks.onAnnouncements(list);
-      }
+      const list = snap.docs
+        .map((d) => d.data() as CourseAnnouncement)
+        .filter(
+          (a) =>
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId)
+        );
+      callbacks.onAnnouncements(list);
     },
     () => {
       firestoreReachable = false;
@@ -472,10 +487,17 @@ export const subscribeToFirestoreCatalog = (callbacks: {
   const unsubAssignments = onSnapshot(
     collection(db, 'assignments'),
     (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map((d) => d.data() as ClassworkAssignment);
-        callbacks.onAssignments(list);
-      }
+      const list = snap.docs
+        .map((d) => d.data() as ClassworkAssignment)
+        .filter(
+          (a) =>
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId)
+        );
+      callbacks.onAssignments(list);
     },
     () => {
       firestoreReachable = false;
