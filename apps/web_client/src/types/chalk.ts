@@ -9,7 +9,7 @@ export type StrokeTool =
   | 'line';
 
 export type NetworkProfile = 'fast4G' | 'unstable3G' | 'crisis2G';
-export type VideoMode = 'off' | 'low' | 'standard';
+export type VideoMode = 'off' | 'low' | 'standard' | 'hd';
 
 export interface VectorPoint {
   x: number; // Normalized [0.0, 1.0]
@@ -56,6 +56,19 @@ export interface CourseMember {
   avatarTag: string;
   role: 'student' | 'lecturer';
   matricOrStaffId: string;
+  isMuted?: boolean;
+}
+
+export interface GradeCategory {
+  id: string;
+  name: string;
+  weight: number;
+}
+
+export interface CourseGradingSystem {
+  calculationType: 'none' | 'total_points' | 'weighted';
+  showToStudents: boolean;
+  categories: GradeCategory[];
 }
 
 export interface CourseModel {
@@ -72,6 +85,31 @@ export interface CourseModel {
   members?: CourseMember[];
   scheduleTime: string;
   department: string;
+  // Google Classroom extended properties
+  section?: string;
+  room?: string;
+  subject?: string;
+  bannerImage?: string;
+  themeColor?: string;
+  isArchived?: boolean;
+  streamPermissions?: 'all' | 'students_comment_only' | 'teachers_only';
+  classworkStreamDisplay?: 'condensed' | 'detailed' | 'hidden';
+  gradingSystem?: CourseGradingSystem;
+  studioSettings?: {
+    studioUrl: string;
+    isVisibleToStudents: boolean;
+  };
+}
+
+export interface CourseAnnouncementComment {
+  id: string;
+  announcementId: string;
+  authorId: string;
+  authorName: string;
+  authorRole: 'lecturer' | 'student';
+  avatarTag: string;
+  content: string;
+  timestamp: string;
 }
 
 export interface CourseAnnouncement {
@@ -82,6 +120,34 @@ export interface CourseAnnouncement {
   timestamp: string;
   content: string;
   isLiveNotice?: boolean;
+  attachments?: ClassworkAttachment[];
+  commentsCount?: number;
+}
+
+export interface TopicModel {
+  id: string;
+  courseId: string;
+  name: string;
+  order: number;
+}
+
+export interface RubricCriterion {
+  title: string;
+  points: number;
+  description?: string;
+}
+
+export interface ClassworkRubric {
+  id: string;
+  criteria: RubricCriterion[];
+}
+
+export interface ClassworkAttachment {
+  id: string;
+  title: string;
+  type: 'file' | 'link' | 'youtube' | 'drive' | 'board';
+  url: string;
+  size?: string;
 }
 
 export interface ClassworkAssignment {
@@ -89,14 +155,133 @@ export interface ClassworkAssignment {
   courseId: string;
   title: string;
   dueDate: string;
+  dueTime?: string;
   description: string;
   isSubmitted: boolean;
   points: string;
   submissionNote?: string;
   submittedAt?: string;
+  // Google Classroom classwork types
+  type?: 'assignment' | 'quiz' | 'question' | 'material';
+  topicId?: string;
+  attachments?: ClassworkAttachment[];
+  rubric?: ClassworkRubric[];
+  questionType?: 'short_answer' | 'multiple_choice';
+  questionOptions?: string[];
+  allowStudentComments?: boolean;
+  allowStudentEdit?: boolean;
+  targetStudentIds?: string[];
+  gradingCategoryId?: string;
 }
 
-export interface MeetParticipant {
+export interface StudentSubmissionAttachment {
+  name: string;
+  url: string;
+  type: 'file' | 'link' | 'board';
+  size?: string;
+}
+
+export interface PrivateComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: 'lecturer' | 'student';
+  avatarTag: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface StudentSubmission {
+  id: string;
+  assignmentId: string;
+  courseId: string;
+  studentId: string;
+  studentName: string;
+  studentAvatar: string;
+  matricOrStaffId?: string;
+  status: 'assigned' | 'turned_in' | 'graded' | 'missing' | 'returned';
+  submittedAt?: string;
+  grade?: number;
+  maxPoints: number;
+  attachments: StudentSubmissionAttachment[];
+  privateComments: PrivateComment[];
+  answerText?: string;
+}
+
+// Studio Subsystems
+export interface StudioPollOption {
+  id: string;
+  text: string;
+  votes: number;
+}
+
+export interface StudioPoll {
+  id: string;
+  roomId: string;
+  question: string;
+  options: StudioPollOption[];
+  voters: Record<string, string>; // userId -> optionId
+  isOpen: boolean;
+  showResults: boolean;
+  createdAt: number;
+  createdBy: string;
+}
+
+export interface StudioQuestion {
+  id: string;
+  roomId: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  text: string;
+  upvotes: string[];
+  isAnswered: boolean;
+  timestamp: number;
+}
+
+export interface BreakoutRoom {
+  id: string;
+  name: string;
+  participantIds: string[];
+}
+
+export interface BreakoutSession {
+  isActive: boolean;
+  timerSeconds?: number;
+  startedAt?: number;
+  rooms: BreakoutRoom[];
+  broadcastMessage?: string;
+}
+
+export interface AttendanceRecord {
+  participantId: string;
+  name: string;
+  email?: string;
+  role: 'lecturer' | 'student';
+  joinTime: number;
+  leaveTime?: number;
+  durationMinutes: number;
+}
+
+export interface HostControlSettings {
+  hostManagement: boolean;
+  quickAccess: boolean;
+  shareScreenAllowed: boolean;
+  sendChatAllowed: boolean;
+  sendReactionsAllowed: boolean;
+  turnMicAllowed: boolean;
+  turnVideoAllowed: boolean;
+  useChalkboardAllowed: boolean;
+}
+
+export interface FloatingReaction {
+  id: string;
+  emoji: string;
+  x: number;
+  senderName: string;
+}
+
+export interface StudioParticipant {
   socketId: string;
   id: string;
   name: string;
@@ -109,10 +294,12 @@ export interface MeetParticipant {
   joinedAt: number;
   isSpeaking?: boolean;
   stream?: MediaStream | null;
+  canDraw?: boolean;
+  canSpeak?: boolean;
 }
 
-// Backward-compatible alias for MeetPeer
-export type MeetPeer = MeetParticipant;
+// Backward-compatible alias for StudioPeer
+export type StudioPeer = StudioParticipant;
 
 export interface ChatMessage {
   id: string;
@@ -223,6 +410,7 @@ export interface BenchmarkMetrics {
     off: { avgTotalKbps: number | null; avgAudioKbps: number | null; samples: number };
     low: { avgTotalKbps: number | null; avgAudioKbps: number | null; samples: number };
     standard: { avgTotalKbps: number | null; avgAudioKbps: number | null; samples: number };
+    hd?: { avgTotalKbps: number | null; avgAudioKbps: number | null; samples: number };
   };
   recordings: {
     count: number;

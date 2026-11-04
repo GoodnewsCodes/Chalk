@@ -48,7 +48,7 @@ export function sanitizeRoomOrEntityId(input: unknown): string | null {
   if (!SAFE_ID_REGEX.test(trimmed)) {
     return null;
   }
-  return trimmed;
+  return trimmed.toLowerCase();
 }
 
 /**
@@ -394,8 +394,9 @@ export async function authenticateSocketConnection(
     socket.handshake.auth?.guestName,
     32
   );
+  const rawGuestId = sanitizeRoomOrEntityId(socket.handshake.auth?.guestId);
   return {
-    uid: `guest_${socket.id.slice(0, 12)}`,
+    uid: rawGuestId || `guest_${socket.id.slice(0, 12)}`,
     name: rawGuestName || 'Guest Student',
     role: 'student',
     isGuest: true,

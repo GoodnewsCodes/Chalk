@@ -64,7 +64,7 @@ export const LandingPage: React.FC = () => {
     setActiveRoomCode(targetRoom);
     setPendingLiveRoom(null);
     navigate(
-      `/meet/${targetRoom}?trial=${isAuthenticated ? '0' : '1'}&muted=${prejoinMicMuted ? '1' : '0'
+      `/studio/${targetRoom}?trial=${isAuthenticated ? '0' : '1'}&muted=${prejoinMicMuted ? '1' : '0'
       }`
     );
   };
@@ -288,7 +288,7 @@ export const LandingPage: React.FC = () => {
                 Hear your lecturer clearly and watch every note appear live on the board while using 97% less mobile data than a regular video call.
               </p>
 
-              {/* Element 4: Google Meet Style Action Row */}
+              {/* Element 4: Google Studio Style Action Row */}
               <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                 <button
                   type="button"
@@ -1452,7 +1452,7 @@ export const LandingPage: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2.5">
                   <Link
                     to={`/auth?mode=login&redirect=${encodeURIComponent(
-                      `/meet/${pendingLiveRoom}`
+                      `/studio/${pendingLiveRoom}`
                     )}`}
                     className={`btn-google py-2.5 px-3 rounded-full border text-xs font-medium flex items-center justify-center gap-1.5 ${isDark
                       ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
@@ -1464,7 +1464,7 @@ export const LandingPage: React.FC = () => {
                   </Link>
                   <Link
                     to={`/auth?mode=signup&redirect=${encodeURIComponent(
-                      `/meet/${pendingLiveRoom}`
+                      `/studio/${pendingLiveRoom}`
                     )}`}
                     className={`btn-google py-2.5 px-3 rounded-full border text-xs font-medium flex items-center justify-center gap-1.5 ${isDark
                       ? 'border-[#69DB7C]/40 text-[#69DB7C] hover:bg-[#69DB7C]/10'

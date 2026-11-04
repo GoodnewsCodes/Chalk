@@ -6,7 +6,7 @@ export interface VectorPoint {
 
 export type StrokeTool = 'pen' | 'highlighter' | 'eraser' | 'laser' | 'rect' | 'circle' | 'arrow' | 'line';
 
-export type VideoMode = 'off' | 'low' | 'standard';
+export type VideoMode = 'off' | 'low' | 'standard' | 'hd';
 
 export interface StrokeDelta {
   id: string;
@@ -56,6 +56,8 @@ export interface RoomParticipant {
   isMuted: boolean;
   handRaised: boolean;
   joinedAt: number;
+  canDraw?: boolean;
+  canSpeak?: boolean;
 }
 
 export interface RoomState {
@@ -64,6 +66,7 @@ export interface RoomState {
   lecturerName: string;
   courseCode: string;
   courseId?: string;
+  stageLayout?: string;
   strokes: StrokeDelta[];
   activeSlideIndex: number;
   totalSlides: number;
@@ -147,4 +150,75 @@ export interface QuizQuestion {
   options: string[];
   correctIndex: number;
   explanation: string;
+}
+
+export interface StudioPollOption {
+  id: string;
+  text: string;
+  votes: number;
+}
+
+export interface StudioPoll {
+  id: string;
+  roomId: string;
+  question: string;
+  options: StudioPollOption[];
+  voters: Record<string, string>;
+  isOpen: boolean;
+  showResults: boolean;
+  createdAt: number;
+  createdBy: string;
+}
+
+export interface StudioQuestion {
+  id: string;
+  roomId: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  text: string;
+  upvotes: string[];
+  isAnswered: boolean;
+  timestamp: number;
+}
+
+export interface BreakoutRoom {
+  id: string;
+  name: string;
+  participantIds: string[];
+}
+
+export interface BreakoutSession {
+  isActive: boolean;
+  timerSeconds?: number;
+  startedAt?: number;
+  rooms: BreakoutRoom[];
+  broadcastMessage?: string;
+}
+
+export interface AttendanceRecord {
+  participantId: string;
+  name: string;
+  email?: string;
+  role: 'lecturer' | 'student';
+  joinTime: number;
+  leaveTime?: number;
+  durationMinutes: number;
+}
+
+export interface HostControlSettings {
+  hostManagement: boolean;
+  quickAccess: boolean;
+  shareScreenAllowed: boolean;
+  sendChatAllowed: boolean;
+  sendReactionsAllowed: boolean;
+  turnMicAllowed: boolean;
+  turnVideoAllowed: boolean;
+}
+
+export interface FloatingReaction {
+  id: string;
+  emoji: string;
+  x: number;
+  senderName: string;
 }

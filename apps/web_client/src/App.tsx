@@ -6,7 +6,13 @@ import { LandingPage } from './pages/LandingPage';
 import { AuthPage } from './pages/AuthPage';
 import { ClassroomHubPage } from './pages/ClassroomHubPage';
 import { CourseDetailPage } from './pages/CourseDetailPage';
-import { MeetPage } from './pages/MeetPage';
+import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
+import { ClassroomCalendarPage } from './pages/ClassroomCalendarPage';
+import { ClassroomTodoPage } from './pages/ClassroomTodoPage';
+import { ClassroomSettingsPage } from './pages/ClassroomSettingsPage';
+import { StudioPage } from './pages/StudioPage';
+import { StudioLobbyPage } from './pages/StudioLobbyPage';
+import { StudioEndedPage } from './pages/StudioEndedPage';
 import { ReplaysPage } from './pages/ReplaysPage';
 import { StudyHubPage } from './pages/StudyHubPage';
 import { BenchmarksPage } from './pages/BenchmarksPage';
@@ -49,8 +55,10 @@ export const App: React.FC = () => {
           {/* Standalone Full-Viewport Routes */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/auth" element={<AuthPage />} />
-          <Route path="/meet" element={<MeetPage />} />
-          <Route path="/meet/:roomCode" element={<MeetPage />} />
+          <Route path="/studio" element={<StudioPage />} />
+          <Route path="/studio/:roomCode" element={<StudioPage />} />
+          <Route path="/studio/lobby/:roomCode" element={<StudioLobbyPage />} />
+          <Route path="/studio/:roomCode/ended" element={<StudioEndedPage />} />
 
           {/* Protected Dashboard Routes (inaccessible without signing up / signing in) */}
           <Route
@@ -61,7 +69,15 @@ export const App: React.FC = () => {
             }
           >
             <Route path="/hub" element={<ClassroomHubPage />} />
+            <Route path="/hub/archived" element={<ClassroomHubPage />} />
+            <Route path="/hub/calendar" element={<ClassroomCalendarPage />} />
+            <Route path="/hub/todo" element={<ClassroomTodoPage />} />
+            <Route path="/hub/settings" element={<ClassroomSettingsPage />} />
             <Route path="/hub/course/:courseId" element={<CourseDetailPage />} />
+            <Route
+              path="/hub/course/:courseId/assignment/:assignmentId"
+              element={<AssignmentDetailPage />}
+            />
             <Route path="/replays" element={<ReplaysPage />} />
             <Route path="/replays/:replayId" element={<ReplaysPage />} />
             <Route path="/study" element={<StudyHubPage />} />

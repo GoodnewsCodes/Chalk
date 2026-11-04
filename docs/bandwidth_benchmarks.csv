@@ -1,5 +1,5 @@
 platform_mode,bitrate_kbps,hourly_mb,packet_loss_tolerance_pct,screen_fidelity_under_3g,relative_data_savings_pct
-"Zoom / Meet (1080p Screen + Video)",1200,540.0,2.5,"Severe Pixelation & Freezes",0.0
+"Zoom / Studio (1080p Screen + Video)",1200,540.0,2.5,"Severe Pixelation & Freezes",0.0
 "Zoom Audio Only",64,28.8,5.0,"No Visuals",94.7
 "Chalk (Vector Canvas + Audio + Low Video 180p)",110,49.5,8.0,"Smooth Vectors & Crisp Diagram",90.8
 "Chalk Crisis Mode (Vector Canvas + Opus Audio)",28,12.6,18.0,"Flawless Crisp Vectors (Zero Drops)",97.6

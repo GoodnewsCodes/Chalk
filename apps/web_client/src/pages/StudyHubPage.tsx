@@ -88,7 +88,7 @@ export const StudyHubPage: React.FC = () => {
           if (active) {
             setNotesContent(
               json.content ||
-                `# Study Notes: ${courses.find((c) => c.id === selectedCourseId)?.code || 'Course'}\n\n- Write your lecture insights and formulas here.\n- Syncs automatically to your student account across devices.`
+              `# Study Notes: ${courses.find((c) => c.id === selectedCourseId)?.code || 'Course'}\n\n- Write your lecture insights and formulas here.\n- Syncs automatically to your student account across devices.`
             );
           }
         }
@@ -317,11 +317,10 @@ export const StudyHubPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <span
-            className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${
-              isDark
-                ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
-                : 'bg-[#ECFDF5] text-[#059669]'
-            }`}
+            className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${isDark
+              ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
+              : 'bg-[#ECFDF5] text-[#059669]'
+              }`}
           >
             Study Hub & Practice
           </span>
@@ -339,15 +338,14 @@ export const StudyHubPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('notes')}
-            className={`btn-google px-4 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 border cursor-pointer ${
-              activeTab === 'notes'
-                ? isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white border-[#059669] hover:bg-[#047857]'
-                : isDark
+            className={`btn-google px-4 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 border cursor-pointer ${activeTab === 'notes'
+              ? isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white border-[#059669] hover:bg-[#047857]'
+              : isDark
                 ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#E3E3E3]'
                 : 'border-[#DADCE0] text-[#5F6368] hover:text-[#202124]'
-            }`}
+              }`}
           >
             <BookOpenText size={16} weight="regular" />
             <span>Lesson Notes</span>
@@ -356,15 +354,14 @@ export const StudyHubPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('quiz')}
-            className={`btn-google px-4 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 border cursor-pointer ${
-              activeTab === 'quiz'
-                ? isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white border-[#059669] hover:bg-[#047857]'
-                : isDark
+            className={`btn-google px-4 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 border cursor-pointer ${activeTab === 'quiz'
+              ? isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white border-[#059669] hover:bg-[#047857]'
+              : isDark
                 ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#E3E3E3]'
                 : 'border-[#DADCE0] text-[#5F6368] hover:text-[#202124]'
-            }`}
+              }`}
           >
             <Exam size={16} weight="regular" />
             <span>Practice Quizzes ({quizzes.length})</span>
@@ -389,11 +386,10 @@ export const StudyHubPage: React.FC = () => {
                 setSelectedCourseId(e.target.value);
                 handleResetQuiz();
               }}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer ${
-                isDark
-                  ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
-                  : 'bg-white border-[#DADCE0] text-[#202124]'
-              }`}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer ${isDark
+                ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
+                : 'bg-white border-[#DADCE0] text-[#202124]'
+                }`}
             >
               {courses.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -403,9 +399,8 @@ export const StudyHubPage: React.FC = () => {
             </select>
           ) : (
             <span
-              className={`text-xs italic ${
-                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-              }`}
+              className={`text-xs italic ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                }`}
             >
               No enrolled courses yet
             </span>
@@ -416,11 +411,10 @@ export const StudyHubPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowCreateQuizModal(true)}
-            className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${
-              isDark
-                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                : 'bg-[#059669] text-white hover:bg-[#047857]'
-            }`}
+            className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${isDark
+              ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+              : 'bg-[#059669] text-white hover:bg-[#047857]'
+              }`}
           >
             <Plus size={15} weight="bold" />
             <span>Create Quiz</span>
@@ -432,16 +426,14 @@ export const StudyHubPage: React.FC = () => {
         <div className="space-y-6">
           {/* Notes Editor Card */}
           <div
-            className={`p-6 sm:p-8 rounded-3xl border space-y-4 ${
-              isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-            }`}
+            className={`p-6 sm:p-8 rounded-3xl border space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+              }`}
           >
             <div className="flex items-center justify-between">
               <div>
                 <h2
-                  className={`font-display text-lg font-medium ${
-                    isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
-                  }`}
+                  className={`font-display text-lg font-medium ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
+                    }`}
                 >
                   Course Revision & Handwritten Takeaways
                 </h2>
@@ -454,11 +446,10 @@ export const StudyHubPage: React.FC = () => {
                 type="button"
                 onClick={handleSaveNotes}
                 disabled={isSavingNotes || !notesLoaded || !selectedCourseId}
-                className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                  isDark
-                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                    : 'bg-[#059669] text-white hover:bg-[#047857]'
-                }`}
+                className={`btn-google px-4 py-2 rounded-full text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+                  }`}
               >
                 <FloppyDisk size={16} weight="regular" />
                 <span>{isSavingNotes ? 'Saving...' : notesSavedNotice ? 'Saved!' : 'Save Notes'}</span>
@@ -475,11 +466,10 @@ export const StudyHubPage: React.FC = () => {
                   : 'Enroll in or create a course to start recording notes.'
               }
               disabled={!selectedCourseId}
-              className={`w-full p-4 rounded-2xl border font-mono text-xs leading-relaxed focus:outline-none resize-y ${
-                isDark
-                  ? 'bg-[#0F1713] border-[#3C4043] text-[#E3E3E3] focus:border-[#69DB7C]'
-                  : 'bg-[#F8F9FA] border-[#DADCE0] text-[#202124] focus:border-[#059669]'
-              }`}
+              className={`w-full p-4 rounded-2xl border font-mono text-xs leading-relaxed focus:outline-none resize-y ${isDark
+                ? 'bg-[#0F1713] border-[#3C4043] text-[#E3E3E3] focus:border-[#69DB7C]'
+                : 'bg-[#F8F9FA] border-[#DADCE0] text-[#202124] focus:border-[#059669]'
+                }`}
             />
           </div>
 
@@ -488,11 +478,10 @@ export const StudyHubPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('quiz')}
-              className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
-                isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white hover:bg-[#047857]'
-              }`}
+              className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
             >
               <span>Take Practice Quiz</span>
               <ArrowRight size={15} weight="regular" />
@@ -500,14 +489,13 @@ export const StudyHubPage: React.FC = () => {
             <Link
               to={
                 courses.find((c) => c.id === selectedCourseId)?.liveRoomCode
-                  ? `/meet/${courses.find((c) => c.id === selectedCourseId)?.liveRoomCode}`
-                  : '/meet'
+                  ? `/studio/${courses.find((c) => c.id === selectedCourseId)?.liveRoomCode}`
+                  : '/studio'
               }
-              className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 ${
-                isDark
-                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
-                  : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
-              }`}
+              className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 ${isDark
+                ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
+                }`}
             >
               <VideoCamera size={16} weight="regular" />
               <span>Enter Live Room</span>
@@ -517,16 +505,14 @@ export const StudyHubPage: React.FC = () => {
       ) : quizQuestions.length === 0 ? (
         /* Empty State: No quizzes authored */
         <div
-          className={`max-w-xl mx-auto p-8 sm:p-12 rounded-3xl border text-center space-y-4 ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`max-w-xl mx-auto p-8 sm:p-12 rounded-3xl border text-center space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <div
-            className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto border ${
-              isDark
-                ? 'bg-[#69DB7C]/10 border-[#69DB7C]/30 text-[#69DB7C]'
-                : 'bg-[#ECFDF5] border-[#059669]/30 text-[#059669]'
-            }`}
+            className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto border ${isDark
+              ? 'bg-[#69DB7C]/10 border-[#69DB7C]/30 text-[#69DB7C]'
+              : 'bg-[#ECFDF5] border-[#059669]/30 text-[#059669]'
+              }`}
           >
             <Exam size={32} weight="regular" />
           </div>
@@ -535,9 +521,8 @@ export const StudyHubPage: React.FC = () => {
               No quizzes authored by lecturer yet
             </h2>
             <p
-              className={`text-xs max-w-md mx-auto ${
-                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-              }`}
+              className={`text-xs max-w-md mx-auto ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                }`}
             >
               Assessment quizzes for this course will appear here once authored by the course lecturer.
             </p>
@@ -547,11 +532,10 @@ export const StudyHubPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowCreateQuizModal(true)}
-                className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
-                  isDark
-                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                    : 'bg-[#059669] text-white hover:bg-[#047857]'
-                }`}
+                className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+                  }`}
               >
                 <Plus size={16} weight="bold" />
                 <span>Create First Quiz</span>
@@ -560,11 +544,10 @@ export const StudyHubPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setActiveTab('notes')}
-                className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
-                  isDark
-                    ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
-                    : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
-                }`}
+                className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${isDark
+                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                  : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
+                  }`}
               >
                 <BookOpenText size={16} weight="regular" />
                 <span>Return to Lesson Notes</span>
@@ -575,23 +558,20 @@ export const StudyHubPage: React.FC = () => {
       ) : completed ? (
         /* Quiz Completed Summary Card */
         <div
-          className={`max-w-lg mx-auto p-8 rounded-3xl border text-center space-y-5 ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`max-w-lg mx-auto p-8 rounded-3xl border text-center space-y-5 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <div
-            className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto ${
-              isDark ? 'bg-[#69DB7C]/15 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
-            }`}
+            className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto ${isDark ? 'bg-[#69DB7C]/15 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
+              }`}
           >
             <CheckCircle size={36} weight="fill" />
           </div>
           <div>
             <h2 className="font-display text-2xl font-medium">Quiz Completed</h2>
             <p
-              className={`text-lg font-mono font-medium mt-1 ${
-                isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
-              }`}
+              className={`text-lg font-mono font-medium mt-1 ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
+                }`}
             >
               You scored {score} out of {quizQuestions.length}
             </p>
@@ -607,22 +587,20 @@ export const StudyHubPage: React.FC = () => {
             <button
               type="button"
               onClick={handleResetQuiz}
-              className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${
-                isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white hover:bg-[#047857]'
-              }`}
+              className={`btn-google px-5 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
             >
               <ArrowCounterClockwise size={16} weight="regular" />
               <span>Retry Quiz</span>
             </button>
             <Link
               to={selectedCourseId ? `/hub/course/${selectedCourseId}` : '/hub'}
-              className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs ${
-                isDark
-                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
-                  : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
-              }`}
+              className={`btn-google px-5 py-2.5 rounded-full border font-medium text-xs ${isDark
+                ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
+                }`}
             >
               Back to Course
             </Link>
@@ -631,9 +609,8 @@ export const StudyHubPage: React.FC = () => {
       ) : (
         /* Active Quiz Question Card */
         <div
-          className={`max-w-2xl mx-auto p-6 sm:p-8 rounded-3xl border space-y-6 ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`max-w-2xl mx-auto p-6 sm:p-8 rounded-3xl border space-y-6 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           {/* Quiz Selector Pills */}
           {quizzes.length > 1 && (
@@ -646,13 +623,12 @@ export const StudyHubPage: React.FC = () => {
                     setActiveQuizId(q.id);
                     handleResetQuiz();
                   }}
-                  className={`px-3 py-1 rounded-full text-xs font-mono font-medium border cursor-pointer ${
-                    activeQuizId === q.id
-                      ? isDark
-                        ? 'bg-[#69DB7C]/20 border-[#69DB7C] text-[#69DB7C]'
-                        : 'bg-[#ECFDF5] border-[#059669] text-[#059669]'
-                      : 'border-[#3C4043] text-[#9AA0A6]'
-                  }`}
+                  className={`px-3 py-1 rounded-full text-xs font-mono font-medium border cursor-pointer ${activeQuizId === q.id
+                    ? isDark
+                      ? 'bg-[#69DB7C]/20 border-[#69DB7C] text-[#69DB7C]'
+                      : 'bg-[#ECFDF5] border-[#059669] text-[#059669]'
+                    : 'border-[#3C4043] text-[#9AA0A6]'
+                    }`}
                 >
                   {q.title}
                 </button>
@@ -667,9 +643,8 @@ export const StudyHubPage: React.FC = () => {
               QUESTION {currentIdx + 1} OF {quizQuestions.length}
             </span>
             <span
-              className={`px-3 py-1 rounded-full font-medium ${
-                isDark ? 'bg-[#69DB7C]/15 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
-              }`}
+              className={`px-3 py-1 rounded-full font-medium ${isDark ? 'bg-[#69DB7C]/15 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
+                }`}
             >
               Score: {score}
             </span>
@@ -713,9 +688,8 @@ export const StudyHubPage: React.FC = () => {
                 >
                   <div className="flex items-center gap-3">
                     <span
-                      className={`w-7 h-7 rounded-full font-mono text-xs font-medium flex items-center justify-center shrink-0 border ${
-                        isDark ? 'border-[#3C4043]' : 'border-[#DADCE0]'
-                      }`}
+                      className={`w-7 h-7 rounded-full font-mono text-xs font-medium flex items-center justify-center shrink-0 border ${isDark ? 'border-[#3C4043]' : 'border-[#DADCE0]'
+                        }`}
                     >
                       {String.fromCharCode(65 + idx)}
                     </span>
@@ -734,11 +708,10 @@ export const StudyHubPage: React.FC = () => {
 
           {submitted && checkResult && (
             <div
-              className={`p-4 rounded-2xl border flex items-start gap-2.5 text-xs leading-relaxed ${
-                isDark
-                  ? 'bg-[#69DB7C]/10 border-[#69DB7C]/30 text-[#E3E3E3]'
-                  : 'bg-[#ECFDF5]/60 border-[#059669]/25 text-[#202124]'
-              }`}
+              className={`p-4 rounded-2xl border flex items-start gap-2.5 text-xs leading-relaxed ${isDark
+                ? 'bg-[#69DB7C]/10 border-[#69DB7C]/30 text-[#E3E3E3]'
+                : 'bg-[#ECFDF5]/60 border-[#059669]/25 text-[#202124]'
+                }`}
             >
               <Lightbulb
                 size={18}
@@ -754,11 +727,10 @@ export const StudyHubPage: React.FC = () => {
               type="button"
               disabled={selectedOption === null}
               onClick={submitted ? handleNextQuestion : handleSubmitAnswer}
-              className={`btn-google w-full py-3.5 rounded-full font-medium text-sm disabled:opacity-40 cursor-pointer ${
-                isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white hover:bg-[#047857]'
-              }`}
+              className={`btn-google w-full py-3.5 rounded-full font-medium text-sm disabled:opacity-40 cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
             >
               {submitted
                 ? currentIdx === quizQuestions.length - 1
@@ -775,11 +747,10 @@ export const StudyHubPage: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <form
             onSubmit={handleSaveCreatedQuiz}
-            className={`modal-surface w-full max-w-xl max-h-[85dvh] overflow-y-auto rounded-3xl border p-6 space-y-4 shadow-2xl ${
-              isDark
-                ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
-                : 'bg-white border-[#DADCE0] text-[#202124]'
-            }`}
+            className={`modal-surface w-full max-w-xl max-h-[85dvh] overflow-y-auto rounded-3xl border p-6 space-y-4 shadow-2xl ${isDark
+              ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
+              : 'bg-white border-[#DADCE0] text-[#202124]'
+              }`}
           >
             <div className="flex items-center justify-between">
               <h2 className="font-display text-lg font-medium">Create Interactive Practice Quiz</h2>
@@ -798,9 +769,8 @@ export const StudyHubPage: React.FC = () => {
                 type="text"
                 value={newQuizTitle}
                 onChange={(e) => setNewQuizTitle(e.target.value)}
-                className={`w-full px-3.5 py-2 rounded-xl border text-sm ${
-                  isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                }`}
+                className={`w-full px-3.5 py-2 rounded-xl border text-sm ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                  }`}
               />
             </div>
 
@@ -808,9 +778,8 @@ export const StudyHubPage: React.FC = () => {
               {newQuizQuestions.map((q, qIndex) => (
                 <div
                   key={qIndex}
-                  className={`p-4 rounded-2xl border space-y-3 ${
-                    isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                  }`}
+                  className={`p-4 rounded-2xl border space-y-3 ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                    }`}
                 >
                   <div className="flex items-center justify-between text-xs font-mono">
                     <span className="font-medium text-[#69DB7C]">Question {qIndex + 1}</span>
@@ -865,11 +834,11 @@ export const StudyHubPage: React.FC = () => {
                               prev.map((item, i) =>
                                 i === qIndex
                                   ? {
-                                      ...item,
-                                      options: item.options.map((o, idx) =>
-                                        idx === optIndex ? val : o
-                                      ),
-                                    }
+                                    ...item,
+                                    options: item.options.map((o, idx) =>
+                                      idx === optIndex ? val : o
+                                    ),
+                                  }
                                   : item
                               )
                             );
@@ -914,9 +883,8 @@ export const StudyHubPage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className={`px-5 py-2 rounded-full font-medium text-xs ${
-                  isDark ? 'bg-[#69DB7C] text-black' : 'bg-[#059669] text-white'
-                }`}
+                className={`px-5 py-2 rounded-full font-medium text-xs ${isDark ? 'bg-[#69DB7C] text-black' : 'bg-[#059669] text-white'
+                  }`}
               >
                 Publish Quiz
               </button>

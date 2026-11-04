@@ -35,7 +35,7 @@ const getDestinationLabel = (path: string | null): string | null => {
   if (path.startsWith('/study')) return 'Study Hub & AI Notes';
   if (path.startsWith('/replays')) return 'Recorded Replays Dashboard';
   if (path.startsWith('/benchmarks')) return 'Data Savings Dashboard';
-  if (path.startsWith('/meet')) return 'Live Classroom Session';
+  if (path.startsWith('/studio')) return 'Live Classroom Session';
   return 'Classroom Dashboard';
 };
 
@@ -258,16 +258,7 @@ export const AuthPage: React.FC = () => {
             <span>{step === 2 ? 'Back to Step 1' : 'Back to Landing'}</span>
           </button>
 
-          <span
-            className={`px-3 py-1 rounded-full font-mono text-[11px] font-medium ${isDark
-              ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
-              : 'bg-[#ECFDF5] text-[#059669]'
-              }`}
-          >
-            {step === 2
-              ? 'Step 2 of 2 • Firestore Profile'
-              : 'Step 1 of 2 • Google Auth'}
-          </span>
+
         </div>
 
         {/* Redirect Guard Banner when user tried to open a protected dashboard */}
@@ -529,7 +520,7 @@ export const AuthPage: React.FC = () => {
             >
               <span>Want to preview the live chalkboard first?</span>
               <Link
-                to="/meet/csc401-algo?trial=1"
+                to="/studio/csc401-algo?trial=1"
                 className={`inline-flex items-center gap-1.5 font-medium hover:underline ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
                   }`}
               >

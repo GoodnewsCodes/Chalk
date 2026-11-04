@@ -45,6 +45,7 @@ export async function fetchLiveKitToken(params: {
   name?: string;
   role?: 'student' | 'lecturer';
   avatarTag?: string;
+  socketId?: string;
 }): Promise<LiveKitTokenResponse | null> {
   try {
     const token = await getCurrentFirebaseIdToken();
@@ -64,6 +65,7 @@ export async function fetchLiveKitToken(params: {
         name: params.name,
         role: params.role || 'student',
         avatarTag: params.avatarTag,
+        socketId: params.socketId,
       }),
     });
 

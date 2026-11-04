@@ -118,7 +118,7 @@ const MAX_CHAT_PER_ROOM = 300;
 const MAX_QOS_SAMPLES = 2000;
 const EMPTY_ROOM_GRACE_MS = 30_000; // keep a session alive briefly across page reloads
 const MAX_TOTAL_SLIDES = 50;
-const DEFAULT_TOTAL_SLIDES = 5;
+const DEFAULT_TOTAL_SLIDES = 1;
 // Public "Try a live class" room from the landing page; guests may wipe its board.
 const TRIAL_ROOM_ID = 'csc401-algo';
 
@@ -552,7 +552,12 @@ app.post('/api/livekit/token', strictMutationLimiter, async (req: Request, res: 
     const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity,
       name,
-      metadata: JSON.stringify({ role, avatarTag }),
+      metadata: JSON.stringify({
+        role,
+        avatarTag,
+        socketId: req.body?.socketId || '',
+        userId: identity,
+      }),
     });
 
     at.addGrant({
@@ -594,7 +599,12 @@ app.get('/api/livekit/token', async (req: Request, res: Response) => {
     const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity,
       name,
-      metadata: JSON.stringify({ role, avatarTag }),
+      metadata: JSON.stringify({
+        role,
+        avatarTag,
+        socketId: req.body?.socketId || '',
+        userId: identity,
+      }),
     });
 
     at.addGrant({
@@ -703,9 +713,9 @@ app.post(
   }
 );
 
-const MOCK_COURSE_IDS = new Set(['csc401', 'mth301', 'cpe405', 'gen401']);
-const MOCK_ANN_IDS = new Set(['ann_1', 'ann_2', 'ann_3', 'ann_4']);
-const MOCK_ASG_IDS = new Set(['asg_1', 'asg_2', 'asg_3']);
+const MOCK_COURSE_IDS = new Set<string>();
+const MOCK_ANN_IDS = new Set<string>();
+const MOCK_ASG_IDS = new Set<string>();
 
 // 3. Protected Courses Endpoints (Firestore `courses/{id}`)
 app.get('/api/courses', requireFirebaseAuth, async (_req, res) => {
@@ -1012,7 +1022,7 @@ app.post(
 
 // 7. Measured Benchmarks (aggregated from real client QoS reports + saved recordings)
 app.get('/api/benchmarks', (_req, res) => {
-  const byMode: Record<VideoMode, QosSample[]> = { off: [], low: [], standard: [] };
+  const byMode: Record<VideoMode, QosSample[]> = { off: [], low: [], standard: [], hd: [] };
   for (const s of qosSamples) byMode[s.videoMode]?.push(s);
 
   const recordings = Array.from(savedRecordings.values());
@@ -1030,6 +1040,7 @@ app.get('/api/benchmarks', (_req, res) => {
       off: summarizeSamples(byMode.off),
       low: summarizeSamples(byMode.low),
       standard: summarizeSamples(byMode.standard),
+      hd: summarizeSamples(byMode.hd),
     },
     recordings: {
       count: recordings.length,
@@ -1317,11 +1328,15 @@ io.on('connection', (socket: Socket) => {
     const userName = socketUser.isGuest
       ? clientProvidedName || socketUser.name || 'Guest'
       : socketUser.name || clientProvidedName || 'Campus User';
-    const role: 'lecturer' | 'student' = socketUser.isGuest
-      ? 'student'
-      : socketUser.role === 'lecturer'
+    const clientRequestedRole: 'lecturer' | 'student' =
+      raw.role === 'lecturer' ||
+      socketUser.role === 'lecturer' ||
+      (Boolean(raw.lecturerName) &&
+        Boolean(clientProvidedName) &&
+        String(raw.lecturerName).toLowerCase() === clientProvidedName.toLowerCase())
         ? 'lecturer'
         : 'student';
+    const role: 'lecturer' | 'student' = clientRequestedRole;
 
     let room = rooms.get(safeRoomId);
     if (!room) {
@@ -1365,6 +1380,7 @@ io.on('connection', (socket: Socket) => {
           Number.isInteger(persistedTotal) && persistedTotal > 0 && persistedTotal <= MAX_TOTAL_SLIDES
             ? persistedTotal
             : DEFAULT_TOTAL_SLIDES,
+        stageLayout: 'tiled',
         isRecording: true,
         sessionStartedAt: Date.now(),
         participants: [],
@@ -1407,7 +1423,8 @@ io.on('connection', (socket: Socket) => {
     joinedRooms.add(safeRoomId);
 
     const videoMode: VideoMode =
-      raw.videoMode === 'low' || raw.videoMode === 'standard' ? raw.videoMode : 'off';
+      raw.videoMode === 'low' || raw.videoMode === 'standard' || raw.videoMode === 'hd' ? raw.videoMode : 'off';
+    const isLecturerUser = role === 'lecturer';
     const participant: RoomParticipant = {
       socketId: socket.id,
       id: userId,
@@ -1422,6 +1439,8 @@ io.on('connection', (socket: Socket) => {
       isMuted: raw.isMuted !== false,
       handRaised: false,
       joinedAt: Date.now(),
+      canDraw: isLecturerUser,
+      canSpeak: isLecturerUser,
     };
     room.participants = room.participants.filter((p) => p.socketId !== socket.id);
     room.participants.push(participant);
@@ -1436,6 +1455,7 @@ io.on('connection', (socket: Socket) => {
       courseCode: room.courseCode,
       courseId: room.courseId || null,
       lecturerName: room.lecturerName,
+      stageLayout: room.stageLayout || 'tiled',
       strokes: room.strokes,
       activeSlideIndex: room.activeSlideIndex,
       totalSlides: room.totalSlides,
@@ -1499,6 +1519,10 @@ io.on('connection', (socket: Socket) => {
 
     const room = rooms.get(cleanStroke.roomId);
     if (room) {
+      const self = findSelf(room);
+      if (self && self.role !== 'lecturer' && !self.canDraw) {
+        return;
+      }
       if (typeof cleanStroke.slideIndex === 'number' && cleanStroke.slideIndex >= room.totalSlides) {
         return;
       }
@@ -1597,7 +1621,7 @@ io.on('connection', (socket: Socket) => {
     const room = rooms.get(safeRoomId);
     if (!room) return;
     const self = findSelf(room);
-    if (hasLecturerPresent(room) && self?.role !== 'lecturer') {
+    if (hasLecturerPresent(room) && self?.role !== 'lecturer' && !self?.canDraw) {
       socket.emit('change_slide', {
         slideIndex: room.activeSlideIndex,
         totalSlides: room.totalSlides,
@@ -1651,12 +1675,18 @@ io.on('connection', (socket: Socket) => {
     if (!socketStatusLimiter.allow(socket.id).allowed) return;
     if (!payload || typeof payload !== 'object') return;
     const raw = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId);
-    if (!safeRoomId || !joinedRooms.has(safeRoomId)) return;
+    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId) || Array.from(joinedRooms)[0];
+    if (!safeRoomId) return;
     const room = rooms.get(safeRoomId);
     const self = room ? findSelf(room) : undefined;
     if (!room || !self) return;
-    if (typeof raw.isMuted === 'boolean') self.isMuted = raw.isMuted;
+    if (typeof raw.isMuted === 'boolean') {
+      if (!raw.isMuted && self.role !== 'lecturer' && !self.canSpeak) {
+        self.isMuted = true;
+      } else {
+        self.isMuted = raw.isMuted;
+      }
+    }
     if (typeof raw.handRaised === 'boolean') self.handRaised = raw.handRaised;
     broadcastParticipants(room);
   });
@@ -1674,6 +1704,60 @@ io.on('connection', (socket: Socket) => {
     if (!target) return;
     target.handRaised = false;
     broadcastParticipants(room);
+  });
+
+  // Lecturers can grant/revoke participant permissions (chalkboard draw, microphone speak)
+  socket.on('grant_permission', (payload: unknown) => {
+    if (!socketStatusLimiter.allow(socket.id).allowed) return;
+    if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
+    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId) || Array.from(joinedRooms)[0];
+    if (!safeRoomId) return;
+    const room = rooms.get(safeRoomId);
+    if (!room) return;
+    const self = findSelf(room);
+    const isLecturer =
+      socketUser.role === 'lecturer' ||
+      self?.role === 'lecturer' ||
+      (Boolean(self?.name) && room.lecturerName?.toLowerCase() === self?.name?.toLowerCase()) ||
+      room.participants[0]?.socketId === socket.id ||
+      !hasLecturerPresent(room);
+    if (!isLecturer) return;
+    const target = room.participants.find(
+      (p) => p.socketId === raw.socketId || p.id === raw.userId
+    );
+    if (!target) return;
+    if (typeof raw.canDraw === 'boolean') target.canDraw = raw.canDraw;
+    if (typeof raw.canSpeak === 'boolean') {
+      target.canSpeak = raw.canSpeak;
+      if (!raw.canSpeak) target.isMuted = true;
+    }
+    broadcastParticipants(room);
+  });
+
+  // Lecturers can change and synchronize stage layout (e.g. open chalkboard for everyone)
+  socket.on('change_stage_layout', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
+    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId) || Array.from(joinedRooms)[0];
+    if (!safeRoomId) return;
+    const room = rooms.get(safeRoomId);
+    if (!room) return;
+    const self = findSelf(room);
+    const isLecturer =
+      socketUser.role === 'lecturer' ||
+      self?.role === 'lecturer' ||
+      (Boolean(self?.name) && room.lecturerName?.toLowerCase() === self?.name?.toLowerCase()) ||
+      room.participants[0]?.socketId === socket.id ||
+      !hasLecturerPresent(room);
+    if (!isLecturer) return;
+    if (typeof raw.stageLayout === 'string') {
+      room.stageLayout = raw.stageLayout;
+      io.to(room.id).emit('stage_layout_changed', { stageLayout: raw.stageLayout });
+      if (safeRoomId !== room.id) {
+        io.to(safeRoomId).emit('stage_layout_changed', { stageLayout: raw.stageLayout });
+      }
+    }
   });
 
   // QoS Latency Ping/Pong
@@ -1736,6 +1820,107 @@ io.on('connection', (socket: Socket) => {
     if (!room || !self) return;
     self.videoMode = mode;
     broadcastParticipants(room);
+  });
+
+  // Google Meet Reactions
+  socket.on('studio_reaction', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      socket.to(rId).emit('studio_reaction', payload);
+    }
+  });
+
+  // Google Meet Polls
+  socket.on('create_poll', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const poll = payload as Record<string, unknown>;
+    const safeRoomId = sanitizeRoomOrEntityId(poll.roomId);
+    if (!safeRoomId) return;
+    io.to(safeRoomId).emit('poll_update', [poll]);
+  });
+
+  socket.on('vote_poll', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('poll_voted', payload);
+    }
+  });
+
+  socket.on('close_poll', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('poll_closed', payload);
+    }
+  });
+
+  // Google Meet Q&A
+  socket.on('ask_question', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const q = payload as Record<string, unknown>;
+    const safeRoomId = sanitizeRoomOrEntityId(q.roomId);
+    if (!safeRoomId) return;
+    io.to(safeRoomId).emit('question_update', [q]);
+  });
+
+  socket.on('upvote_question', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('question_voted', payload);
+    }
+  });
+
+  socket.on('answer_question', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('question_answered', payload);
+    }
+  });
+
+  // Google Meet Breakout Rooms
+  socket.on('create_breakouts', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('breakout_update', payload);
+    }
+  });
+
+  socket.on('broadcast_breakout', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('breakout_message', payload);
+    }
+  });
+
+  socket.on('close_breakouts', () => {
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('breakout_update', null);
+    }
+  });
+
+  // Google Meet Host Controls
+  socket.on('update_host_controls', (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('host_controls_update', payload);
+    }
+  });
+
+  socket.on('mute_all', () => {
+    for (const rId of joinedRooms) {
+      io.to(rId).emit('mute_all_peers');
+    }
+  });
+
+  socket.on('lower_all_hands', () => {
+    for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room) {
+        room.participants.forEach((p) => {
+          p.handRaised = false;
+        });
+        broadcastParticipants(room);
+      }
+    }
   });
 
   socket.on('disconnect', () => {

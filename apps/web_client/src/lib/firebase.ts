@@ -400,9 +400,9 @@ export const getCurrentFirebaseIdToken = async (): Promise<string | null> => {
  * Seeds default courses, announcements, and assignments into Cloud Firestore
  * if the collections are empty on first connect.
  */
-export const MOCK_COURSE_IDS = new Set(['csc401', 'mth301', 'cpe405', 'gen401']);
-export const MOCK_ANNOUNCEMENT_IDS = new Set(['ann_1', 'ann_2', 'ann_3', 'ann_4']);
-export const MOCK_ASSIGNMENT_IDS = new Set(['asg_1', 'asg_2', 'asg_3']);
+export const MOCK_COURSE_IDS = new Set(['legacy_mock_01']);
+export const MOCK_ANNOUNCEMENT_IDS = new Set(['legacy_ann_01']);
+export const MOCK_ASSIGNMENT_IDS = new Set(['legacy_asg_01']);
 
 /**
  * Purges any previously seeded mock courses, announcements, or assignments from Cloud Firestore.

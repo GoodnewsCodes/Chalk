@@ -106,7 +106,7 @@ export const ReplaysPage: React.FC = () => {
     if (!targetId) return;
 
     // Check if it's already in local catalog or has full events
-    const local = REPLAY_CATALOG.find((r) => r.id === targetId);
+    const local = REPLAY_CATALOG.find((r: DvrReplayItem) => r.id === targetId);
     if (local) {
       setSelectedReplay(local);
       return;
@@ -217,11 +217,10 @@ export const ReplaysPage: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <span
-              className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${
-                isDark
-                  ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
-                  : 'bg-[#ECFDF5] text-[#059669]'
-              }`}
+              className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${isDark
+                ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
+                : 'bg-[#ECFDF5] text-[#059669]'
+                }`}
             >
               Vector DVR Player
             </span>
@@ -230,20 +229,18 @@ export const ReplaysPage: React.FC = () => {
             Class Replay Library
           </h1>
           <p
-            className={`text-sm mt-1 ${
-              isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-            }`}
+            className={`text-sm mt-1 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+              }`}
           >
             Offline lecture replay with synchronized Opus voice and low-bandwidth vector strokes.
           </p>
         </div>
 
         <div
-          className={`p-10 sm:p-14 rounded-3xl border text-center space-y-5 ${
-            isDark
-              ? 'bg-[#141E19] border-[#3C4043]'
-              : 'bg-[#F8F9FA] border-[#DADCE0]'
-          }`}
+          className={`p-10 sm:p-14 rounded-3xl border text-center space-y-5 ${isDark
+            ? 'bg-[#141E19] border-[#3C4043]'
+            : 'bg-[#F8F9FA] border-[#DADCE0]'
+            }`}
         >
           <div className="w-16 h-16 mx-auto rounded-full bg-[#69DB7C]/15 border border-[#69DB7C]/30 flex items-center justify-center text-[#69DB7C]">
             <PlayCircle size={34} weight="regular" />
@@ -254,9 +251,8 @@ export const ReplaysPage: React.FC = () => {
               No Class Replays Yet
             </h2>
             <p
-              className={`text-xs sm:text-sm leading-relaxed ${
-                isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-              }`}
+              className={`text-xs sm:text-sm leading-relaxed ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                }`}
             >
               Dual-track Vector DVR recordings are generated automatically once a live meeting or lecture concludes. Recordings save 97.6% of bandwidth by preserving vector stroke coordinates alongside 24 kbps audio.
             </p>
@@ -265,24 +261,22 @@ export const ReplaysPage: React.FC = () => {
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <button
               type="button"
-              onClick={() => navigate('/meet')}
-              className={`btn-google px-5 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-2 cursor-pointer ${
-                isDark
-                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                  : 'bg-[#059669] text-white hover:bg-[#047857]'
-              }`}
+              onClick={() => navigate('/studio')}
+              className={`btn-google px-5 py-2.5 rounded-full text-xs font-medium inline-flex items-center gap-2 cursor-pointer ${isDark
+                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                : 'bg-[#059669] text-white hover:bg-[#047857]'
+                }`}
             >
               <VideoCamera size={16} weight="regular" />
-              <span>Start a Meeting</span>
+              <span>Start a Studio</span>
             </button>
 
             <Link
               to="/hub"
-              className={`btn-google px-5 py-2.5 rounded-full border text-xs font-medium cursor-pointer ${
-                isDark
-                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
-                  : 'border-[#DADCE0] text-[#202124] hover:bg-white'
-              }`}
+              className={`btn-google px-5 py-2.5 rounded-full border text-xs font-medium cursor-pointer ${isDark
+                ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                : 'border-[#DADCE0] text-[#202124] hover:bg-white'
+                }`}
             >
               Browse Classroom Hub
             </Link>
@@ -290,11 +284,10 @@ export const ReplaysPage: React.FC = () => {
             <button
               type="button"
               onClick={handleLoadDemo}
-              className={`btn-google px-4 py-2.5 rounded-full text-xs font-mono border border-dashed opacity-80 hover:opacity-100 cursor-pointer ${
-                isDark
-                  ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#69DB7C]'
-                  : 'border-[#DADCE0] text-[#5F6368] hover:text-[#059669]'
-              }`}
+              className={`btn-google px-4 py-2.5 rounded-full text-xs font-mono border border-dashed opacity-80 hover:opacity-100 cursor-pointer ${isDark
+                ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#69DB7C]'
+                : 'border-[#DADCE0] text-[#5F6368] hover:text-[#059669]'
+                }`}
             >
               + Load Sample Replay
             </button>
@@ -311,18 +304,16 @@ export const ReplaysPage: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <span
-              className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${
-                isDark
-                  ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
-                  : 'bg-[#ECFDF5] text-[#059669]'
-              }`}
+              className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${isDark
+                ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
+                : 'bg-[#ECFDF5] text-[#059669]'
+                }`}
             >
               Vector DVR Player
             </span>
             <span
-              className={`font-mono text-xs font-medium ${
-                isDark ? 'text-[#81C995]' : 'text-[#188038]'
-              }`}
+              className={`font-mono text-xs font-medium ${isDark ? 'text-[#81C995]' : 'text-[#188038]'
+                }`}
             >
               {selectedReplay.totalSizeKb} KB vs {selectedReplay.mp4EquivalentMb} MB MP4 ({selectedReplay.savingsPercent}% Saved)
             </span>
@@ -331,9 +322,8 @@ export const ReplaysPage: React.FC = () => {
             {selectedReplay.title}
           </h1>
           <p
-            className={`text-xs mt-1 ${
-              isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-            }`}
+            className={`text-xs mt-1 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+              }`}
           >
             {selectedReplay.courseCode} • {selectedReplay.lecturerName} • Recorded {selectedReplay.recordedAt}
           </p>
@@ -343,15 +333,14 @@ export const ReplaysPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setDownloadedId(selectedReplay.id)}
-            className={`btn-google px-4 py-2.5 rounded-full border text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${
-              downloadedId === selectedReplay.id
-                ? isDark
-                  ? 'bg-[#81C995]/15 border-[#81C995]/40 text-[#81C995]'
-                  : 'bg-[#E6F4EA] border-[#188038]/30 text-[#188038]'
-                : isDark
+            className={`btn-google px-4 py-2.5 rounded-full border text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${downloadedId === selectedReplay.id
+              ? isDark
+                ? 'bg-[#81C995]/15 border-[#81C995]/40 text-[#81C995]'
+                : 'bg-[#E6F4EA] border-[#188038]/30 text-[#188038]'
+              : isDark
                 ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
                 : 'bg-white border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
-            }`}
+              }`}
           >
             {downloadedId === selectedReplay.id ? (
               <>
@@ -368,11 +357,10 @@ export const ReplaysPage: React.FC = () => {
 
           <Link
             to="/study"
-            className={`btn-google px-4 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 ${
-              isDark
-                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                : 'bg-[#059669] text-white hover:bg-[#047857]'
-            }`}
+            className={`btn-google px-4 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 ${isDark
+              ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+              : 'bg-[#059669] text-white hover:bg-[#047857]'
+              }`}
           >
             <BookOpenText size={16} weight="regular" />
             <span>Practice Quiz</span>
@@ -393,15 +381,14 @@ export const ReplaysPage: React.FC = () => {
                 setIsPlaying(true);
                 navigate(`/replays/${item.id}`);
               }}
-              className={`btn-google px-4 py-2 rounded-full border text-xs font-medium cursor-pointer ${
-                isCurrent
-                  ? isDark
-                    ? 'bg-[#69DB7C]/15 border-[#69DB7C]/30 text-[#69DB7C]'
-                    : 'bg-[#ECFDF5] border-[#059669]/20 text-[#059669]'
-                  : isDark
+              className={`btn-google px-4 py-2 rounded-full border text-xs font-medium cursor-pointer ${isCurrent
+                ? isDark
+                  ? 'bg-[#69DB7C]/15 border-[#69DB7C]/30 text-[#69DB7C]'
+                  : 'bg-[#ECFDF5] border-[#059669]/20 text-[#059669]'
+                : isDark
                   ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#E3E3E3]'
                   : 'border-[#DADCE0] text-[#5F6368] hover:text-[#202124]'
-              }`}
+                }`}
             >
               {item.courseCode}: {item.title.split(':')[0]}
             </button>
@@ -430,11 +417,10 @@ export const ReplaysPage: React.FC = () => {
 
           {/* Scrubber Control Bar */}
           <div
-            className={`p-5 rounded-3xl border space-y-3 ${
-              isDark
-                ? 'bg-[#141E19] border-[#3C4043]'
-                : 'bg-white border-[#DADCE0]'
-            }`}
+            className={`p-5 rounded-3xl border space-y-3 ${isDark
+              ? 'bg-[#141E19] border-[#3C4043]'
+              : 'bg-white border-[#DADCE0]'
+              }`}
           >
             <input
               type="range"
@@ -458,9 +444,8 @@ export const ReplaysPage: React.FC = () => {
                     setCurrentPositionMs((p) => Math.max(0, p - 15000))
                   }
                   title="Rewind 15s"
-                  className={`btn-google p-2 rounded-full cursor-pointer ${
-                    isDark ? 'hover:bg-[#28292A]' : 'hover:bg-[#F1F3F4]'
-                  }`}
+                  className={`btn-google p-2 rounded-full cursor-pointer ${isDark ? 'hover:bg-[#28292A]' : 'hover:bg-[#F1F3F4]'
+                    }`}
                 >
                   <Rewind size={18} weight="regular" />
                 </button>
@@ -469,11 +454,10 @@ export const ReplaysPage: React.FC = () => {
                   type="button"
                   onClick={() => setIsPlaying((p) => !p)}
                   aria-label={isPlaying ? 'Pause' : 'Play'}
-                  className={`btn-google w-10 h-10 rounded-full flex items-center justify-center cursor-pointer ${
-                    isDark
-                      ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                      : 'bg-[#059669] text-white hover:bg-[#047857]'
-                  }`}
+                  className={`btn-google w-10 h-10 rounded-full flex items-center justify-center cursor-pointer ${isDark
+                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                    : 'bg-[#059669] text-white hover:bg-[#047857]'
+                    }`}
                 >
                   {isPlaying ? (
                     <Pause size={18} weight="fill" />
@@ -490,9 +474,8 @@ export const ReplaysPage: React.FC = () => {
                     )
                   }
                   title="Forward 15s"
-                  className={`btn-google p-2 rounded-full cursor-pointer ${
-                    isDark ? 'hover:bg-[#28292A]' : 'hover:bg-[#F1F3F4]'
-                  }`}
+                  className={`btn-google p-2 rounded-full cursor-pointer ${isDark ? 'hover:bg-[#28292A]' : 'hover:bg-[#F1F3F4]'
+                    }`}
                 >
                   <FastForward size={18} weight="regular" />
                 </button>
@@ -502,11 +485,10 @@ export const ReplaysPage: React.FC = () => {
                 aria-label="Playback speed"
                 value={playbackSpeed}
                 onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
-                className={`px-3 py-1.5 rounded-full border font-mono text-xs font-medium cursor-pointer ${
-                  isDark
-                    ? 'bg-[#0F1713] border-[#3C4043] text-[#69DB7C]'
-                    : 'bg-[#F8F9FA] border-[#DADCE0] text-[#059669]'
-                }`}
+                className={`px-3 py-1.5 rounded-full border font-mono text-xs font-medium cursor-pointer ${isDark
+                  ? 'bg-[#0F1713] border-[#3C4043] text-[#69DB7C]'
+                  : 'bg-[#F8F9FA] border-[#DADCE0] text-[#059669]'
+                  }`}
               >
                 <option value={1}>1.0x</option>
                 <option value={1.25}>1.25x</option>
@@ -519,17 +501,15 @@ export const ReplaysPage: React.FC = () => {
 
         {/* Right 4 cols: Smart Chapters List */}
         <div
-          className={`lg:col-span-4 rounded-3xl border p-6 flex flex-col justify-between ${
-            isDark
-              ? 'bg-[#141E19] border-[#3C4043]'
-              : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`lg:col-span-4 rounded-3xl border p-6 flex flex-col justify-between ${isDark
+            ? 'bg-[#141E19] border-[#3C4043]'
+            : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <div className="space-y-4">
             <div
-              className={`flex items-center gap-2 font-display font-medium text-base ${
-                isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
-              }`}
+              className={`flex items-center gap-2 font-display font-medium text-base ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
+                }`}
             >
               <BookmarkSimple size={19} weight="regular" />
               <span>Smart Lecture Chapters</span>
@@ -548,15 +528,14 @@ export const ReplaysPage: React.FC = () => {
                     key={`${markerTime}_${idx}`}
                     type="button"
                     onClick={() => setCurrentPositionMs(markerTime)}
-                    className={`btn-google w-full text-left p-3.5 rounded-2xl border text-xs font-medium cursor-pointer ${
-                      isActive
-                        ? isDark
-                          ? 'bg-[#69DB7C]/15 border-[#69DB7C]/40 text-[#69DB7C]'
-                          : 'bg-[#ECFDF5] border-[#059669]/30 text-[#059669]'
-                        : isDark
+                    className={`btn-google w-full text-left p-3.5 rounded-2xl border text-xs font-medium cursor-pointer ${isActive
+                      ? isDark
+                        ? 'bg-[#69DB7C]/15 border-[#69DB7C]/40 text-[#69DB7C]'
+                        : 'bg-[#ECFDF5] border-[#059669]/30 text-[#059669]'
+                      : isDark
                         ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#E3E3E3]'
                         : 'border-[#DADCE0] text-[#5F6368] hover:text-[#202124]'
-                    }`}
+                      }`}
                   >
                     {ch.label || ch.title || `Chapter ${idx + 1}`}
                   </button>
@@ -566,14 +545,12 @@ export const ReplaysPage: React.FC = () => {
           </div>
 
           <div
-            className={`pt-4 mt-4 border-t text-xs space-y-2 ${
-              isDark ? 'border-[#3C4043] text-[#9AA0A6]' : 'border-[#DADCE0] text-[#5F6368]'
-            }`}
+            className={`pt-4 mt-4 border-t text-xs space-y-2 ${isDark ? 'border-[#3C4043] text-[#9AA0A6]' : 'border-[#DADCE0] text-[#5F6368]'
+              }`}
           >
             <div
-              className={`font-mono font-medium ${
-                isDark ? 'text-[#E3E3E3]' : 'text-[#202124]'
-              }`}
+              className={`font-mono font-medium ${isDark ? 'text-[#E3E3E3]' : 'text-[#202124]'
+                }`}
             >
               Dual-Track Vector DVR Format
             </div>

@@ -8,23 +8,38 @@ import React, {
 } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
+  AttendanceRecord,
+  BreakoutSession,
+  ChatMessage,
   ClassworkAssignment,
   CourseAnnouncement,
+  CourseAnnouncementComment,
   CourseModel,
+  FloatingReaction,
+  HostControlSettings,
   LaserPointer,
-  MeetParticipant,
+  StudioParticipant,
+  StudioPoll,
+  StudioQuestion,
   NetworkProfile,
   StrokeData,
   StrokeTool,
+  StudentSubmission,
+  TopicModel,
   UserProfile,
   VideoMode,
-  ChatMessage,
 } from '../types/chalk';
 import {
   DEFAULT_BOARD_STROKES,
+  INITIAL_ANNOUNCEMENT_COMMENTS,
   INITIAL_ANNOUNCEMENTS,
   INITIAL_ASSIGNMENTS,
+  INITIAL_ATTENDANCE,
   INITIAL_COURSES,
+  INITIAL_POLLS,
+  INITIAL_QUESTIONS,
+  INITIAL_SUBMISSIONS,
+  INITIAL_TOPICS,
 } from '../data/mockCatalog';
 import {
   ensureFirestoreSeedData,
@@ -84,6 +99,7 @@ interface AppContextValue {
   firebaseReady: boolean;
   refreshFirebaseConnection: () => void;
   guestName: string;
+  guestId: string;
   setGuestName: (name: string) => void;
   authenticateWithGoogle: () => Promise<{
     user: UserProfile;
@@ -111,32 +127,76 @@ interface AppContextValue {
   courses: CourseModel[];
   announcements: CourseAnnouncement[];
   assignments: ClassworkAssignment[];
+  topics: TopicModel[];
+  submissions: StudentSubmission[];
+  announcementComments: Record<string, CourseAnnouncementComment[]>;
   liveRooms: LiveRoomSummary[];
   refreshCourses: () => Promise<void>;
-  addAnnouncement: (courseId: string, content: string, isLiveNotice?: boolean) => void;
+  addAnnouncement: (
+    courseId: string,
+    content: string,
+    isLiveNotice?: boolean,
+    attachments?: any[]
+  ) => void;
+  deleteAnnouncement: (announcementId: string) => Promise<void>;
+  addAnnouncementComment: (announcementId: string, content: string) => Promise<void>;
+  deleteAnnouncementComment: (announcementId: string, commentId: string) => Promise<void>;
   submitAssignment: (assignmentId: string, note: string) => void;
+  submitWork: (
+    assignmentId: string,
+    attachments: any[],
+    answerText?: string,
+    note?: string
+  ) => Promise<void>;
+  unsubmitWork: (assignmentId: string) => Promise<void>;
+  gradeSubmission: (
+    submissionId: string,
+    grade: number,
+    privateFeedback?: string
+  ) => Promise<void>;
+  addPrivateComment: (submissionId: string, text: string) => Promise<void>;
   createAssignment: (params: {
     courseId: string;
     title: string;
     description: string;
     dueDate?: string;
+    dueTime?: string;
     points?: string;
+    type?: 'assignment' | 'quiz' | 'question' | 'material';
+    topicId?: string;
+    attachments?: any[];
+    rubric?: any[];
+    questionType?: 'short_answer' | 'multiple_choice';
+    questionOptions?: string[];
   }) => Promise<ClassworkAssignment>;
+  deleteAssignment: (assignmentId: string) => Promise<void>;
+  createTopic: (courseId: string, name: string) => Promise<TopicModel>;
+  deleteTopic: (topicId: string) => Promise<void>;
   joinCourseByCode: (code: string) => Promise<CourseModel | null>;
   createCourse: (params: {
     code: string;
     title: string;
     scheduleTime: string;
     department: string;
+    section?: string;
+    room?: string;
+    subject?: string;
   }) => Promise<CourseModel>;
+  updateCourseSettings: (courseId: string, updates: Partial<CourseModel>) => Promise<void>;
+  archiveCourse: (courseId: string) => Promise<void>;
+  restoreCourse: (courseId: string) => Promise<void>;
+  deleteCoursePermanently: (courseId: string) => Promise<void>;
+  muteStudent: (courseId: string, studentId: string, isMuted: boolean) => Promise<void>;
+  removeStudentFromCourse: (courseId: string, studentId: string) => Promise<void>;
+  inviteStudentToCourse: (courseId: string, emailOrName: string) => Promise<void>;
 
-  // Live Meeting & Real-time Telemetry
+  // Live Studio & Real-time Telemetry
   activeRoomCode: string;
   setActiveRoomCode: (code: string) => void;
   activeRoomInfo: ActiveRoomMeta;
   socketConnected: boolean;
   selfSocketId: string;
-  participants: MeetParticipant[];
+  participants: StudioParticipant[];
   chatMessages: ChatMessage[];
   sendChatMessage: (text: string) => void;
 
@@ -146,6 +206,8 @@ interface AppContextValue {
   isHandRaised: boolean;
   toggleHandRaised: () => void;
   lowerHand: (socketId: string) => void;
+  lowerAllHands: () => void;
+  muteAllParticipants: () => void;
   localStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
   speakingMap: Record<string, boolean>;
@@ -163,6 +225,7 @@ interface AppContextValue {
   nextSlide: () => void;
   prevSlide: () => void;
   goToSlide: (index: number) => void;
+  addSlide: () => void;
   laser: LaserPointer | null;
   emitLaser: (x: number, y: number, active: boolean) => void;
   commitStroke: (stroke: StrokeData) => void;
@@ -185,6 +248,41 @@ interface AppContextValue {
   chalkDataUsedMb: number;
   zoomDataUsedMb: number;
   savingsPercentage: number;
+
+  // Google Studio Extended Features
+  stageLayout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar';
+  setStageLayout: (layout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar') => void;
+  broadcastStageLayout: (layout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar', roomId?: string) => void;
+  grantParticipantPermission: (socketId: string, permissions: { canDraw?: boolean; canSpeak?: boolean }) => void;
+  floatingReactions: FloatingReaction[];
+  sendReaction: (emoji: string) => void;
+  isCaptionsOn: boolean;
+  toggleCaptions: () => void;
+  activeCaptions: { speaker: string; text: string }[];
+  polls: StudioPoll[];
+  createPoll: (question: string, options: string[], showResults: boolean) => void;
+  votePoll: (pollId: string, optionId: string) => void;
+  closePoll: (pollId: string) => void;
+  questions: StudioQuestion[];
+  askQuestion: (text: string) => void;
+  upvoteQuestion: (questionId: string) => void;
+  markQuestionAnswered: (questionId: string) => void;
+  breakoutSession: BreakoutSession | null;
+  createBreakouts: (roomCount: number, timerMinutes: number) => void;
+  broadcastBreakout: (message: string) => void;
+  closeBreakouts: () => void;
+  attendanceRecords: AttendanceRecord[];
+  exportAttendanceReport: () => void;
+  hostSettings: HostControlSettings;
+  updateHostSettings: (settings: Partial<HostControlSettings>) => void;
+
+  // Pre-join Green Room Lobby
+  prejoinCam: boolean;
+  setPrejoinCam: (val: boolean) => void;
+  prejoinMic: boolean;
+  setPrejoinMic: (val: boolean) => void;
+  prejoinBlur: 'off' | 'slight' | 'strong' | 'classroom';
+  setPrejoinBlur: (val: 'off' | 'slight' | 'strong' | 'classroom') => void;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -194,6 +292,13 @@ const STORAGE_THEME_KEY = 'chalk_web_theme_pref_v2';
 const STORAGE_COURSES_KEY = 'chalk_firestore_cache_courses_v4';
 const STORAGE_ANNOUNCEMENTS_KEY = 'chalk_firestore_cache_announcements_v4';
 const STORAGE_ASSIGNMENTS_KEY = 'chalk_firestore_cache_assignments_v4';
+const STORAGE_TOPICS_KEY = 'chalk_cache_topics_v5';
+const STORAGE_SUBMISSIONS_KEY = 'chalk_cache_submissions_v5';
+const STORAGE_COMMENTS_KEY = 'chalk_cache_comments_v5';
+const STORAGE_POLLS_KEY = 'chalk_cache_polls_v5';
+const STORAGE_QUESTIONS_KEY = 'chalk_cache_questions_v5';
+const STORAGE_ATTENDANCE_KEY = 'chalk_cache_attendance_v5';
+const STORAGE_HOST_SETTINGS_KEY = 'chalk_cache_host_settings_v5';
 const BACKEND_API_BASE = 'http://localhost:4000';
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -262,6 +367,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [guestName, setGuestName] = useState<string>('Guest Student');
+  const [guestId] = useState<string>(() => {
+    try {
+      let id = sessionStorage.getItem('chalk_guest_id');
+      if (!id) {
+        id = `guest_${Math.random().toString(36).substring(2, 9)}`;
+        sessionStorage.setItem('chalk_guest_id', id);
+      }
+      return id;
+    } catch {
+      return `guest_${Date.now()}`;
+    }
+  });
   const isAuthenticated = Boolean(currentUser && currentUser.isProfileComplete);
 
   const saveUserLocally = (user: UserProfile | null) => {
@@ -339,6 +456,111 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [liveRooms, setLiveRooms] = useState<LiveRoomSummary[]>([]);
+
+  // Topics State
+  const [topics, setTopics] = useState<TopicModel[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_TOPICS_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_TOPICS;
+  });
+
+  // Student Submissions State
+  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_SUBMISSIONS_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_SUBMISSIONS;
+  });
+
+  // Announcement Comments State
+  const [announcementComments, setAnnouncementComments] = useState<Record<string, CourseAnnouncementComment[]>>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_COMMENTS_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_ANNOUNCEMENT_COMMENTS;
+  });
+
+  // Google Studio Features State
+  const [stageLayout, setStageLayout] = useState<'whiteboard' | 'tiled' | 'spotlight' | 'sidebar'>('tiled');
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const [isCaptionsOn, setIsCaptionsOn] = useState<boolean>(false);
+  const [activeCaptions, setActiveCaptions] = useState<{ speaker: string; text: string }[]>([]);
+  const [polls, setPolls] = useState<StudioPoll[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_POLLS_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_POLLS;
+  });
+  const [questions, setQuestions] = useState<StudioQuestion[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_QUESTIONS_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_QUESTIONS;
+  });
+  const [breakoutSession, setBreakoutSession] = useState<BreakoutSession | null>(null);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_ATTENDANCE_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { }
+    return INITIAL_ATTENDANCE;
+  });
+  const [hostSettings, setHostSettings] = useState<HostControlSettings>(() => {
+    const defaults: HostControlSettings = {
+      hostManagement: true,
+      quickAccess: true,
+      shareScreenAllowed: true,
+      sendChatAllowed: true,
+      sendReactionsAllowed: true,
+      turnMicAllowed: false,
+      turnVideoAllowed: true,
+      useChalkboardAllowed: false,
+    };
+    try {
+      const cached = localStorage.getItem(STORAGE_HOST_SETTINGS_KEY);
+      if (cached) return { ...defaults, ...JSON.parse(cached) };
+    } catch { }
+    return defaults;
+  });
+
+  // Pre-join Green Room Lobby State
+  const [prejoinCam, setPrejoinCam] = useState<boolean>(true);
+  const [prejoinMic, setPrejoinMic] = useState<boolean>(true);
+  const [prejoinBlur, setPrejoinBlur] = useState<'off' | 'slight' | 'strong' | 'classroom'>('off');
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_TOPICS_KEY, JSON.stringify(topics));
+  }, [topics]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_SUBMISSIONS_KEY, JSON.stringify(submissions));
+  }, [submissions]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_COMMENTS_KEY, JSON.stringify(announcementComments));
+  }, [announcementComments]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_POLLS_KEY, JSON.stringify(polls));
+  }, [polls]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_QUESTIONS_KEY, JSON.stringify(questions));
+  }, [questions]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_ATTENDANCE_KEY, JSON.stringify(attendanceRecords));
+  }, [attendanceRecords]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_HOST_SETTINGS_KEY, JSON.stringify(hostSettings));
+  }, [hostSettings]);
 
   // Purge legacy cache versions from localStorage
   useEffect(() => {
@@ -441,8 +663,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const syncWithBackendApi = async (
     path: string,
-    method: 'GET' | 'POST',
-    body?: Record<string, unknown>,
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'GET',
+    body?: any,
     userOverride?: UserProfile | null
   ) => {
     try {
@@ -533,7 +755,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Classroom & Meeting State
+  // Classroom & Studio State
   const [activeRoomCode, setActiveRoomCodeState] = useState<string>('');
   const [activeRoomInfo, setActiveRoomInfo] = useState<ActiveRoomMeta>({
     roomId: '',
@@ -552,7 +774,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [socketConnected, setSocketConnected] = useState<boolean>(false);
   const [selfSocketId, setSelfSocketId] = useState<string>('');
-  const [participants, setParticipants] = useState<MeetParticipant[]>([]);
+  const [participants, setParticipants] = useState<StudioParticipant[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   // WebRTC Audio / Video & In-call state
@@ -572,7 +794,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentColor, setCurrentColor] = useState<string>('#69DB7C');
   const [currentWidth, setCurrentWidth] = useState<number>(3.5);
   const [activeSlideIndex, setActiveSlideIndex] = useState<number>(0);
-  const [totalSlides, setTotalSlides] = useState<number>(5);
+  const [totalSlides, setTotalSlides] = useState<number>(1);
   const [laser, setLaser] = useState<LaserPointer | null>(null);
 
   // Telemetry & QoS
@@ -654,7 +876,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const audio = new Audio();
           audio.srcObject = stream;
           audio.autoplay = true;
-          audio.play().catch(() => {});
+          audio.play().catch(() => { });
         }
       };
 
@@ -679,7 +901,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [sendSignal]
   );
 
-  // Initialize Socket.io connection for Live Meeting
+  // Initialize Socket.io connection for Live Studio
   useEffect(() => {
     if (!activeRoomCode) {
       setSocketConnected(false);
@@ -699,6 +921,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cb({
           token: fbToken || fallbackToken,
           guestName: guestName || 'Guest Student',
+          guestId: currentUser?.id || guestId,
         });
       },
     });
@@ -739,6 +962,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('room_state_snapshot', (snapshot) => {
       if (snapshot.selfSocketId) {
         setSelfSocketId(snapshot.selfSocketId);
+      }
+      if (
+        snapshot.stageLayout === 'whiteboard' ||
+        snapshot.stageLayout === 'tiled' ||
+        snapshot.stageLayout === 'spotlight' ||
+        snapshot.stageLayout === 'sidebar'
+      ) {
+        setStageLayout(snapshot.stageLayout);
       }
       if (Array.isArray(snapshot.strokes)) {
         setStrokes(snapshot.strokes.length ? snapshot.strokes : (snapshot.roomId === 'csc401-algo' ? DEFAULT_BOARD_STROKES : []));
@@ -862,6 +1093,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setChatMessages((prev) => [...prev, msg]);
     });
 
+    socket.on('studio_reaction', (reaction: FloatingReaction) => {
+      setFloatingReactions((prev) => [...prev, reaction]);
+      setTimeout(() => {
+        setFloatingReactions((prev) => prev.filter((r) => r.id !== reaction.id));
+      }, 3500);
+    });
+
+    socket.on('poll_update', (incomingPolls: StudioPoll[]) => {
+      if (Array.isArray(incomingPolls)) {
+        setPolls(incomingPolls);
+      }
+    });
+
+    socket.on('question_update', (incomingQuestions: StudioQuestion[]) => {
+      if (Array.isArray(incomingQuestions)) {
+        setQuestions(incomingQuestions);
+      }
+    });
+
+    socket.on('breakout_update', (session: BreakoutSession | null) => {
+      setBreakoutSession(session);
+    });
+
+    socket.on('stage_layout_changed', ({ stageLayout: remoteLayout }: { stageLayout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar' }) => {
+      if (remoteLayout) {
+        setStageLayout(remoteLayout);
+      }
+    });
+
+    socket.on('host_controls_update', (incomingControls: HostControlSettings) => {
+      setHostSettings((prev) => ({ ...prev, ...incomingControls }));
+    });
+
+    socket.on('caption_stream', ({ speaker, text }: { speaker: string; text: string }) => {
+      setActiveCaptions((prev) => [...prev.slice(-3), { speaker, text }]);
+    });
+
+    socket.on('mute_all_peers', () => {
+      if (currentUser?.role !== 'lecturer' && !isMicMuted) {
+        toggleMic();
+      }
+    });
+
     return () => {
       if (activeRoomCode) {
         socket.emit('leave_room', { roomId: activeRoomCode });
@@ -940,6 +1214,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Toggle Microphone
   const toggleMic = useCallback(async () => {
+    const isMeLecturer = currentUser?.role === 'lecturer';
+    const myParticipant = participants.find((p) => p.socketId === selfSocketId || p.id === currentUser?.id);
+    const hasMicAccess = isMeLecturer || hostSettings.turnMicAllowed || Boolean(myParticipant?.canSpeak);
+
+    if (isMicMuted && !hasMicAccess) {
+      alert('Microphone access is restricted by the lecturer. Raise your hand to request to speak.');
+      return;
+    }
+
     const nextMuted = !isMicMuted;
     setIsMicMuted(nextMuted);
 
@@ -957,7 +1240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isMuted: nextMuted,
       });
     }
-  }, [activeRoomCode, isMicMuted, startAudio]);
+  }, [activeRoomCode, currentUser?.id, currentUser?.role, hostSettings.turnMicAllowed, isMicMuted, participants, selfSocketId, startAudio]);
 
   // Toggle Hand Raise
   const toggleHandRaised = useCallback(() => {
@@ -1080,8 +1363,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const interval = setInterval(() => {
       let baseBitrate = 24.0;
-      if (videoMode === 'low') baseBitrate += 72.0;
-      if (videoMode === 'standard') baseBitrate += 260.0;
+      if (videoMode === 'low') baseBitrate += 120.0;
+      if (videoMode === 'standard') baseBitrate += 750.0;
+      if (videoMode === 'hd') baseBitrate += 1500.0;
 
       const jitter = (Math.random() - 0.5) * 3.2;
       const nextBitrate = Math.max(14.5, baseBitrate + jitter);
@@ -1111,7 +1395,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           rttMs: curRtt,
           packetLoss: curLoss,
           audioKbps: 24.0,
-          videoKbps: videoMode === 'low' ? 72.0 : videoMode === 'standard' ? 260.0 : 0,
+          videoKbps: videoMode === 'low' ? 120.0 : videoMode === 'hd' ? 1500.0 : videoMode === 'standard' ? 750.0 : 0,
           telemetryKbps: 3.5,
           videoMode,
           peers: participants.length,
@@ -1127,7 +1411,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tagged = { ...stroke, slideIndex: activeSlideIndex };
     setStrokes((prev) => {
       const updated = [...prev, tagged];
-      persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => {});
+      persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
       return updated;
     });
     setRedoStack([]);
@@ -1140,7 +1424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const last = prev[prev.length - 1];
       setRedoStack((r) => [last, ...r]);
       const updated = prev.slice(0, -1);
-      persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => {});
+      persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
       if (socketRef.current?.connected && last.id) {
         socketRef.current.emit('remove_stroke', {
           roomId: activeRoomCode,
@@ -1157,7 +1441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const [next, ...rest] = prev;
       setStrokes((s) => {
         const updated = [...s, next];
-        persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => {});
+        persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
         socketRef.current?.emit('stroke_delta', next);
         return updated;
       });
@@ -1168,7 +1452,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const clearCanvas = () => {
     setStrokes([]);
     setRedoStack([]);
-    persistRoomStateToFirestore(activeRoomCode, { strokes: [] }).catch(() => {});
+    persistRoomStateToFirestore(activeRoomCode, { strokes: [] }).catch(() => { });
     socketRef.current?.emit('clear_canvas', {
       roomId: activeRoomCode,
       userId: currentUser?.id || 'usr_guest',
@@ -1179,7 +1463,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const next = activeSlideIndex + 1;
     if (next < totalSlides) {
       setActiveSlideIndex(next);
-      persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => {});
+      persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => { });
       socketRef.current?.emit('change_slide', {
         roomId: activeRoomCode,
         slideIndex: next,
@@ -1190,7 +1474,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const prevSlide = () => {
     const next = Math.max(0, activeSlideIndex - 1);
     setActiveSlideIndex(next);
-    persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => {});
+    persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => { });
     socketRef.current?.emit('change_slide', {
       roomId: activeRoomCode,
       slideIndex: next,
@@ -1200,13 +1484,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const goToSlide = (index: number) => {
     if (index >= 0 && index < totalSlides) {
       setActiveSlideIndex(index);
-      persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: index }).catch(() => {});
+      persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: index }).catch(() => { });
       socketRef.current?.emit('change_slide', {
         roomId: activeRoomCode,
         slideIndex: index,
       });
     }
   };
+
+  const addSlide = useCallback(() => {
+    const next = totalSlides;
+    setTotalSlides((prev) => prev + 1);
+    setActiveSlideIndex(next);
+    persistRoomStateToFirestore(activeRoomCode, {
+      activeSlideIndex: next,
+    }).catch(() => { });
+    socketRef.current?.emit('change_slide', {
+      roomId: activeRoomCode,
+      slideIndex: next,
+      totalSlides: totalSlides + 1,
+    });
+  }, [activeRoomCode, totalSlides]);
+
+  const grantParticipantPermission = useCallback(
+    (socketId: string, permissions: { canDraw?: boolean; canSpeak?: boolean }) => {
+      setParticipants((prev) =>
+        prev.map((p) => (p.socketId === socketId ? { ...p, ...permissions } : p))
+      );
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('grant_permission', {
+          roomId: activeRoomCode,
+          socketId,
+          ...permissions,
+        });
+      }
+    },
+    [activeRoomCode]
+  );
+
+  const broadcastStageLayout = useCallback(
+    (layout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar', roomId?: string) => {
+      setStageLayout(layout);
+      const targetRoom = roomId || activeRoomCode;
+      if (socketRef.current?.connected && targetRoom) {
+        socketRef.current.emit('change_stage_layout', {
+          roomId: targetRoom,
+          stageLayout: layout,
+        });
+      }
+    },
+    [activeRoomCode]
+  );
 
   const emitLaser = (x: number, y: number, active: boolean) => {
     const pointer: LaserPointer = {
@@ -1226,19 +1554,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const normalized = code.trim().toLowerCase();
     const studentMember = currentUser
       ? {
-          id: currentUser.id,
-          name: currentUser.name,
-          avatarTag: currentUser.avatarTag,
-          role: currentUser.role,
-          matricOrStaffId: currentUser.matricOrStaffId,
-        }
+        id: currentUser.id,
+        name: currentUser.name,
+        avatarTag: currentUser.avatarTag,
+        role: currentUser.role,
+        matricOrStaffId: currentUser.matricOrStaffId,
+      }
       : {
-          id: `guest_${Date.now()}`,
-          name: guestName || 'Campus Student',
-          avatarTag: 'GS',
-          role: 'student' as const,
-          matricOrStaffId: 'GUEST/STUDENT',
-        };
+        id: `guest_${Date.now()}`,
+        name: guestName || 'Campus Student',
+        avatarTag: 'GS',
+        role: 'student' as const,
+        matricOrStaffId: 'GUEST/STUDENT',
+      };
 
     const existing = courses.find(
       (c) =>
@@ -1255,9 +1583,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const alreadyMember = currentMembers.some((m) => m.id === studentMember.id);
             if (!alreadyMember) {
               const updatedMembers = [...currentMembers, studentMember];
+              const currentMemberIds = c.memberIds || [];
+              const updatedMemberIds = currentMemberIds.includes(studentMember.id)
+                ? currentMemberIds
+                : [...currentMemberIds, studentMember.id];
               return {
                 ...c,
                 members: updatedMembers,
+                memberIds: updatedMemberIds,
                 enrolledCount: Math.max(c.enrolledCount + 1, updatedMembers.length),
               };
             }
@@ -1290,7 +1623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       members: [studentMember],
     };
     setCourses((prev) => [fallback, ...prev]);
-    saveCourseToFirestore(fallback).catch(() => {});
+    saveCourseToFirestore(fallback).catch(() => { });
     return fallback;
   };
 
@@ -1340,11 +1673,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       members: [lecturerMember],
     };
     setCourses((prev) => [newCourse, ...prev]);
-    saveCourseToFirestore(newCourse).catch(() => {});
+    saveCourseToFirestore(newCourse).catch(() => { });
     return newCourse;
   };
 
-  const addAnnouncement = (courseId: string, content: string, isLiveNotice = false) => {
+  const addAnnouncement = (
+    courseId: string,
+    content: string,
+    isLiveNotice = false,
+    attachments: any[] = []
+  ) => {
     const newAnn: CourseAnnouncement = {
       id: `ann_${Date.now()}`,
       courseId,
@@ -1353,31 +1691,221 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: 'Just now',
       content,
       isLiveNotice,
+      attachments,
+      commentsCount: 0,
     };
     setAnnouncements((prev) => [newAnn, ...prev]);
-    saveAnnouncementToFirestore(newAnn).catch(() => {});
+    saveAnnouncementToFirestore(newAnn).catch(() => { });
     syncWithBackendApi('/api/announcements', 'POST', {
       courseId,
       content,
       isLiveNotice,
+      attachments,
     });
   };
 
+  const deleteAnnouncement = async (announcementId: string) => {
+    setAnnouncements((prev) => prev.filter((a) => a.id !== announcementId));
+    setAnnouncementComments((prev) => {
+      const copy = { ...prev };
+      delete copy[announcementId];
+      return copy;
+    });
+    syncWithBackendApi(`/api/announcements/${announcementId}`, 'DELETE');
+  };
+
+  const addAnnouncementComment = async (announcementId: string, content: string) => {
+    const comment: CourseAnnouncementComment = {
+      id: `com_${Date.now()}`,
+      announcementId,
+      authorId: currentUser?.id || 'usr_guest',
+      authorName: currentUser?.name || guestName || 'Campus User',
+      authorRole: currentUser?.role || 'student',
+      avatarTag: currentUser?.avatarTag || 'CU',
+      content,
+      timestamp: 'Just now',
+    };
+    setAnnouncementComments((prev) => ({
+      ...prev,
+      [announcementId]: [...(prev[announcementId] || []), comment],
+    }));
+    setAnnouncements((prev) =>
+      prev.map((a) =>
+        a.id === announcementId ? { ...a, commentsCount: (a.commentsCount || 0) + 1 } : a
+      )
+    );
+    syncWithBackendApi(`/api/announcements/${announcementId}/comments`, 'POST', { content });
+  };
+
+  const deleteAnnouncementComment = async (announcementId: string, commentId: string) => {
+    setAnnouncementComments((prev) => ({
+      ...prev,
+      [announcementId]: (prev[announcementId] || []).filter((c) => c.id !== commentId),
+    }));
+    setAnnouncements((prev) =>
+      prev.map((a) =>
+        a.id === announcementId ? { ...a, commentsCount: Math.max(0, (a.commentsCount || 1) - 1) } : a
+      )
+    );
+    syncWithBackendApi(`/api/announcements/${announcementId}/comments/${commentId}`, 'DELETE');
+  };
+
+  const createTopic = async (courseId: string, name: string): Promise<TopicModel> => {
+    const newTopic: TopicModel = {
+      id: `top_${Date.now()}`,
+      courseId,
+      name,
+      order: topics.filter((t) => t.courseId === courseId).length,
+    };
+    setTopics((prev) => [...prev, newTopic]);
+    syncWithBackendApi('/api/topics', 'POST', newTopic);
+    return newTopic;
+  };
+
+  const deleteTopic = async (topicId: string) => {
+    setTopics((prev) => prev.filter((t) => t.id !== topicId));
+    setAssignments((prev) =>
+      prev.map((a) => (a.topicId === topicId ? { ...a, topicId: undefined } : a))
+    );
+    syncWithBackendApi(`/api/topics/${topicId}`, 'DELETE');
+  };
+
   const submitAssignment = (assignmentId: string, note: string) => {
+    submitWork(assignmentId, [], undefined, note);
+  };
+
+  const submitWork = async (
+    assignmentId: string,
+    attachments: any[] = [],
+    answerText?: string,
+    note?: string
+  ) => {
+    const targetAsg = assignments.find((a) => a.id === assignmentId);
+    const maxPts = parseInt(targetAsg?.points || '100', 10) || 100;
+    const existingSub = submissions.find(
+      (s) => s.assignmentId === assignmentId && s.studentId === currentUser?.id
+    );
+
+    const updatedSub: StudentSubmission = {
+      id: existingSub?.id || `sub_${Date.now()}`,
+      assignmentId,
+      courseId: targetAsg?.courseId || '',
+      studentId: currentUser?.id || 'usr_guest',
+      studentName: currentUser?.name || guestName || 'Campus Student',
+      studentAvatar: currentUser?.avatarTag || 'CS',
+      matricOrStaffId: currentUser?.matricOrStaffId || '',
+      status: 'turned_in',
+      submittedAt: new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      maxPoints: maxPts,
+      attachments: attachments.length ? attachments : existingSub?.attachments || [],
+      privateComments: existingSub?.privateComments || [],
+      answerText: answerText || existingSub?.answerText,
+    };
+
+    setSubmissions((prev) => [
+      ...prev.filter(
+        (s) =>
+          s.id !== updatedSub.id &&
+          !(s.assignmentId === assignmentId && s.studentId === currentUser?.id)
+      ),
+      updatedSub,
+    ]);
+
     setAssignments((prev) =>
       prev.map((a) =>
         a.id === assignmentId
           ? {
-              ...a,
-              isSubmitted: true,
-              dueDate: 'Submitted • Pending Review',
-              submissionNote: note || 'Uploaded solution archive.',
-            }
+            ...a,
+            isSubmitted: true,
+            submissionNote: note || 'Submitted work.',
+            submittedAt: updatedSub.submittedAt,
+          }
           : a
       )
     );
-    saveAssignmentSubmissionToFirestore(assignmentId, note, currentUser?.id).catch(() => {});
-    syncWithBackendApi(`/api/assignments/${assignmentId}/submit`, 'POST', { note });
+
+    saveAssignmentSubmissionToFirestore(assignmentId, note || '', currentUser?.id).catch(() => { });
+    syncWithBackendApi(`/api/assignments/${assignmentId}/submit`, 'POST', {
+      attachments,
+      answerText,
+      note,
+    });
+  };
+
+  const unsubmitWork = async (assignmentId: string) => {
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s.assignmentId === assignmentId && s.studentId === currentUser?.id
+          ? { ...s, status: 'assigned' }
+          : s
+      )
+    );
+    setAssignments((prev) =>
+      prev.map((a) => (a.id === assignmentId ? { ...a, isSubmitted: false } : a))
+    );
+    syncWithBackendApi(`/api/assignments/${assignmentId}/unsubmit`, 'POST');
+  };
+
+  const gradeSubmission = async (
+    submissionId: string,
+    grade: number,
+    privateFeedback?: string
+  ) => {
+    setSubmissions((prev) =>
+      prev.map((s) => {
+        if (s.id === submissionId) {
+          const comments = [...s.privateComments];
+          if (privateFeedback?.trim()) {
+            comments.push({
+              id: `pcom_${Date.now()}`,
+              authorId: currentUser?.id || 'usr_lecturer',
+              authorName: currentUser?.name || 'Prof. Lecturer',
+              authorRole: 'lecturer',
+              avatarTag: currentUser?.avatarTag || 'PL',
+              text: privateFeedback.trim(),
+              timestamp: 'Just now',
+            });
+          }
+          return {
+            ...s,
+            grade,
+            status: 'graded',
+            privateComments: comments,
+          };
+        }
+        return s;
+      })
+    );
+    syncWithBackendApi(`/api/submissions/${submissionId}/grade`, 'POST', {
+      grade,
+      privateFeedback,
+    });
+  };
+
+  const addPrivateComment = async (submissionId: string, text: string) => {
+    const comment = {
+      id: `pcom_${Date.now()}`,
+      authorId: currentUser?.id || 'usr_user',
+      authorName: currentUser?.name || 'Campus User',
+      authorRole: currentUser?.role || 'student',
+      avatarTag: currentUser?.avatarTag || 'CU',
+      text,
+      timestamp: 'Just now',
+    };
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s.id === submissionId
+          ? { ...s, privateComments: [...s.privateComments, comment] }
+          : s
+      )
+    );
+    syncWithBackendApi(`/api/submissions/${submissionId}/comments`, 'POST', { text });
   };
 
   const createAssignment = async ({
@@ -1385,34 +1913,308 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     title,
     description,
     dueDate,
+    dueTime,
     points,
+    type = 'assignment',
+    topicId,
+    attachments = [],
+    rubric = [],
+    questionType,
+    questionOptions,
   }: {
     courseId: string;
     title: string;
     description: string;
     dueDate?: string;
+    dueTime?: string;
     points?: string;
+    type?: 'assignment' | 'quiz' | 'question' | 'material';
+    topicId?: string;
+    attachments?: any[];
+    rubric?: any[];
+    questionType?: 'short_answer' | 'multiple_choice';
+    questionOptions?: string[];
   }): Promise<ClassworkAssignment> => {
     const newAsg: ClassworkAssignment = {
       id: `asg_${Date.now()}`,
       courseId,
       title,
       description,
-      dueDate: dueDate || 'Due next week',
-      points: points || '100 points',
+      dueDate: dueDate || 'No due date',
+      dueTime,
+      points: points || (type === 'material' ? 'Ungraded' : '100 points'),
       isSubmitted: false,
+      type,
+      topicId,
+      attachments,
+      rubric,
+      questionType,
+      questionOptions,
     };
     setAssignments((prev) => [newAsg, ...prev]);
-    saveAssignmentSubmissionToFirestore(newAsg.id, '', currentUser?.id).catch(() => {});
-    syncWithBackendApi('/api/assignments', 'POST', {
-      id: newAsg.id,
-      courseId,
-      title,
-      description,
-      dueDate: newAsg.dueDate,
-      points: newAsg.points,
-    });
+    saveAssignmentSubmissionToFirestore(newAsg.id, '', currentUser?.id).catch(() => { });
+    syncWithBackendApi('/api/assignments', 'POST', newAsg);
     return newAsg;
+  };
+
+  const deleteAssignment = async (assignmentId: string) => {
+    setAssignments((prev) => prev.filter((a) => a.id !== assignmentId));
+    setSubmissions((prev) => prev.filter((s) => s.assignmentId !== assignmentId));
+    syncWithBackendApi(`/api/assignments/${assignmentId}`, 'DELETE');
+  };
+
+  const updateCourseSettings = async (courseId: string, updates: Partial<CourseModel>) => {
+    setCourses((prev) =>
+      prev.map((c) => (c.id === courseId ? { ...c, ...updates } : c))
+    );
+    syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', updates);
+  };
+
+  const archiveCourse = async (courseId: string) => {
+    updateCourseSettings(courseId, { isArchived: true });
+  };
+
+  const restoreCourse = async (courseId: string) => {
+    updateCourseSettings(courseId, { isArchived: false });
+  };
+
+  const deleteCoursePermanently = async (courseId: string) => {
+    setCourses((prev) => prev.filter((c) => c.id !== courseId));
+    setAssignments((prev) => prev.filter((a) => a.courseId !== courseId));
+    setAnnouncements((prev) => prev.filter((a) => a.courseId !== courseId));
+    setTopics((prev) => prev.filter((t) => t.courseId !== courseId));
+    syncWithBackendApi(`/api/courses/${courseId}`, 'DELETE');
+  };
+
+  const muteStudent = async (courseId: string, studentId: string, isMuted: boolean) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id === courseId && c.members) {
+          return {
+            ...c,
+            members: c.members.map((m) =>
+              m.id === studentId ? { ...m, isMuted } : m
+            ),
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const removeStudentFromCourse = async (courseId: string, studentId: string) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id === courseId && c.members) {
+          const updated = c.members.filter((m) => m.id !== studentId);
+          return {
+            ...c,
+            members: updated,
+            memberIds: (c.memberIds || []).filter((id) => id !== studentId),
+            enrolledCount: Math.max(0, updated.length),
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const inviteStudentToCourse = async (courseId: string, emailOrName: string) => {
+    const fakeId = `usr_${Math.random().toString(36).substring(2, 8)}`;
+    const initials = emailOrName.substring(0, 2).toUpperCase();
+    const newMember = {
+      id: fakeId,
+      name: emailOrName,
+      avatarTag: initials,
+      role: 'student' as const,
+      matricOrStaffId: `INV/${Date.now().toString().slice(-4)}`,
+    };
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id === courseId) {
+          const members = [...(c.members || []), newMember];
+          return {
+            ...c,
+            members,
+            memberIds: [...(c.memberIds || []), fakeId],
+            enrolledCount: members.length,
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  // Google Studio features
+  const sendReaction = (emoji: string) => {
+    const reaction: FloatingReaction = {
+      id: `rx_${Date.now()}_${Math.random()}`,
+      emoji,
+      x: 20 + Math.random() * 60,
+      senderName: currentUser?.name || guestName || 'Peer',
+    };
+    setFloatingReactions((prev) => [...prev, reaction]);
+    socketRef.current?.emit('studio_reaction', reaction);
+    setTimeout(() => {
+      setFloatingReactions((prev) => prev.filter((r) => r.id !== reaction.id));
+    }, 3500);
+  };
+
+  const toggleCaptions = () => {
+    setIsCaptionsOn((prev) => !prev);
+  };
+
+  const createPoll = (question: string, options: string[], showResults: boolean) => {
+    const newPoll: StudioPoll = {
+      id: `poll_${Date.now()}`,
+      roomId: activeRoomCode,
+      question,
+      options: options.map((opt, i) => ({ id: `opt_${i}`, text: opt, votes: 0 })),
+      voters: {},
+      isOpen: true,
+      showResults,
+      createdAt: Date.now(),
+      createdBy: currentUser?.name || 'Host',
+    };
+    setPolls((prev) => [newPoll, ...prev]);
+    socketRef.current?.emit('create_poll', newPoll);
+  };
+
+  const votePoll = (pollId: string, optionId: string) => {
+    const userId = currentUser?.id || guestName || 'anon';
+    setPolls((prev) =>
+      prev.map((p) => {
+        if (p.id === pollId) {
+          const currentVote = p.voters[userId];
+          const updatedOptions = p.options.map((opt) => {
+            if (opt.id === optionId) return { ...opt, votes: opt.votes + 1 };
+            if (opt.id === currentVote) return { ...opt, votes: Math.max(0, opt.votes - 1) };
+            return opt;
+          });
+          return {
+            ...p,
+            options: updatedOptions,
+            voters: { ...p.voters, [userId]: optionId },
+          };
+        }
+        return p;
+      })
+    );
+    socketRef.current?.emit('vote_poll', { pollId, optionId, userId });
+  };
+
+  const closePoll = (pollId: string) => {
+    setPolls((prev) =>
+      prev.map((p) => (p.id === pollId ? { ...p, isOpen: false } : p))
+    );
+    socketRef.current?.emit('close_poll', { pollId });
+  };
+
+  const askQuestion = (text: string) => {
+    const newQ: StudioQuestion = {
+      id: `q_${Date.now()}`,
+      roomId: activeRoomCode,
+      authorId: currentUser?.id || 'guest',
+      authorName: currentUser?.name || guestName || 'Participant',
+      authorAvatar: currentUser?.avatarTag || 'P',
+      text,
+      upvotes: [],
+      isAnswered: false,
+      timestamp: Date.now(),
+    };
+    setQuestions((prev) => [newQ, ...prev]);
+    socketRef.current?.emit('ask_question', newQ);
+  };
+
+  const upvoteQuestion = (questionId: string) => {
+    const userId = currentUser?.id || guestName || 'anon';
+    setQuestions((prev) =>
+      prev.map((q) => {
+        if (q.id === questionId) {
+          const hasVoted = q.upvotes.includes(userId);
+          const upvotes = hasVoted
+            ? q.upvotes.filter((u) => u !== userId)
+            : [...q.upvotes, userId];
+          return { ...q, upvotes };
+        }
+        return q;
+      })
+    );
+    socketRef.current?.emit('upvote_question', { questionId, userId });
+  };
+
+  const markQuestionAnswered = (questionId: string) => {
+    setQuestions((prev) =>
+      prev.map((q) => (q.id === questionId ? { ...q, isAnswered: true } : q))
+    );
+    socketRef.current?.emit('answer_question', { questionId });
+  };
+
+  const createBreakouts = (roomCount: number, timerMinutes: number) => {
+    const nonHostParticipants = participants.filter((p) => p.role !== 'lecturer');
+    const rooms = Array.from({ length: roomCount }).map((_, i) => ({
+      id: `room_${i + 1}`,
+      name: `Breakout Room ${i + 1}`,
+      participantIds: [] as string[],
+    }));
+    nonHostParticipants.forEach((p, idx) => {
+      rooms[idx % roomCount].participantIds.push(p.id);
+    });
+
+    const session: BreakoutSession = {
+      isActive: true,
+      timerSeconds: timerMinutes * 60,
+      startedAt: Date.now(),
+      rooms,
+    };
+    setBreakoutSession(session);
+    socketRef.current?.emit('create_breakouts', session);
+  };
+
+  const broadcastBreakout = (message: string) => {
+    if (breakoutSession) {
+      setBreakoutSession({ ...breakoutSession, broadcastMessage: message });
+    }
+    socketRef.current?.emit('broadcast_breakout', { message });
+  };
+
+  const closeBreakouts = () => {
+    setBreakoutSession(null);
+    socketRef.current?.emit('close_breakouts');
+  };
+
+  const exportAttendanceReport = () => {
+    const lines = [
+      'Name,Email,Role,Join Time,Duration (Mins)',
+      ...attendanceRecords.map(
+        (r) =>
+          `"${r.name}","${r.email || 'N/A'}","${r.role}","${new Date(r.joinTime).toLocaleTimeString()}","${r.durationMinutes}"`
+      ),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `attendance_${activeRoomCode}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const updateHostSettings = (settings: Partial<HostControlSettings>) => {
+    setHostSettings((prev) => {
+      const updated = { ...prev, ...settings };
+      socketRef.current?.emit('update_host_controls', updated);
+      return updated;
+    });
+  };
+
+  const muteAllParticipants = () => {
+    socketRef.current?.emit('mute_all');
+  };
+
+  const lowerAllHands = () => {
+    setParticipants((prev) => prev.map((p) => ({ ...p, handRaised: false })));
+    socketRef.current?.emit('lower_all_hands');
   };
 
   const authenticateWithGoogle = async (): Promise<{
@@ -1470,7 +2272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const stableId = `usr_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     const nextUser: UserProfile = {
-      id: currentUser?.id || stableId,
+      id: currentUser && currentUser.email === email ? currentUser.id : stableId,
       name,
       email,
       role,
@@ -1481,7 +2283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isProfileComplete: completeImmediately,
     };
     saveUserLocally(nextUser);
-    saveUserProfileToFirestore(nextUser).catch(() => {});
+    saveUserProfileToFirestore(nextUser).catch(() => { });
     resolveAuthTokenForBackend(nextUser).then((idToken) => {
       if (idToken) {
         syncWithBackendApi(
@@ -1547,6 +2349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         firebaseReady,
         refreshFirebaseConnection,
         guestName,
+        guestId,
         setGuestName,
         authenticateWithGoogle,
         signInWithGoogle,
@@ -1555,13 +2358,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         courses,
         announcements,
         assignments,
+        topics,
+        submissions,
+        announcementComments,
         liveRooms,
         refreshCourses,
         addAnnouncement,
+        deleteAnnouncement,
+        addAnnouncementComment,
+        deleteAnnouncementComment,
         submitAssignment,
+        submitWork,
+        unsubmitWork,
+        gradeSubmission,
+        addPrivateComment,
         createAssignment,
+        deleteAssignment,
+        createTopic,
+        deleteTopic,
         joinCourseByCode,
         createCourse,
+        updateCourseSettings,
+        archiveCourse,
+        restoreCourse,
+        deleteCoursePermanently,
+        muteStudent,
+        removeStudentFromCourse,
+        inviteStudentToCourse,
         activeRoomCode,
         setActiveRoomCode,
         activeRoomInfo,
@@ -1575,6 +2398,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isHandRaised,
         toggleHandRaised,
         lowerHand,
+        lowerAllHands,
+        muteAllParticipants,
         localStream,
         remoteStreams,
         speakingMap,
@@ -1590,6 +2415,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         nextSlide,
         prevSlide,
         goToSlide,
+        addSlide,
         laser,
         emitLaser,
         commitStroke,
@@ -1610,6 +2436,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         chalkDataUsedMb,
         zoomDataUsedMb,
         savingsPercentage,
+        stageLayout,
+        setStageLayout,
+        broadcastStageLayout,
+        grantParticipantPermission,
+        floatingReactions,
+        sendReaction,
+        isCaptionsOn,
+        toggleCaptions,
+        activeCaptions,
+        polls,
+        createPoll,
+        votePoll,
+        closePoll,
+        questions,
+        askQuestion,
+        upvoteQuestion,
+        markQuestionAnswered,
+        breakoutSession,
+        createBreakouts,
+        broadcastBreakout,
+        closeBreakouts,
+        attendanceRecords,
+        exportAttendanceReport,
+        hostSettings,
+        updateHostSettings,
+        prejoinCam,
+        setPrejoinCam,
+        prejoinMic,
+        setPrejoinMic,
+        prejoinBlur,
+        setPrejoinBlur,
       }}
     >
       {children}

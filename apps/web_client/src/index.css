@@ -26,6 +26,11 @@
     --btn-primary-text: #0F1713;
   }
 
+  html,
+  body {
+    height: 100%;
+  }
+
   html {
     font-family: var(--font-sans);
     scroll-behavior: smooth;
