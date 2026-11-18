@@ -11,6 +11,7 @@ import {
 import {
   Firestore,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -30,9 +31,8 @@ import {
 } from '../types/chalk';
 import {
   DEFAULT_BOARD_STROKES,
-  INITIAL_ANNOUNCEMENTS,
-  INITIAL_ASSIGNMENTS,
-  INITIAL_COURSES,
+  DEMO_COURSE_IDS,
+  isDemoAccount,
 } from '../data/mockCatalog';
 
 export interface FirebaseEnvConfig {
@@ -143,22 +143,29 @@ const writeLocalUserProfileCache = (profile: UserProfile): void => {
   }
 };
 
+const stripUndefined = <T extends Record<string, any>>(obj: T): T => {
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned as T;
+};
+
 const withFirestoreTimeout = async <T>(
   promise: Promise<T>,
-  timeoutMs = 1800
+  timeoutMs = 2500
 ): Promise<T | null> => {
-  if (!firestoreReachable) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeoutPromise = new Promise<null>((resolve) => {
       timer = setTimeout(() => {
-        firestoreReachable = false;
         resolve(null);
       }, timeoutMs);
     });
     return await Promise.race([promise, timeoutPromise]);
   } catch {
-    firestoreReachable = false;
     return null;
   } finally {
     if (timer) clearTimeout(timer);
@@ -167,15 +174,51 @@ const withFirestoreTimeout = async <T>(
 
 const deriveInitials = (name: string): string => {
   const cleaned = name.trim();
-  if (!cleaned) return 'AO';
+  if (!cleaned) return 'CU';
   return (
     cleaned
       .split(/\s+/)
       .map((part) => part[0])
       .join('')
       .slice(0, 2)
-      .toUpperCase() || 'AO'
+      .toUpperCase() || 'CU'
   );
+};
+
+const sanitizeRealUserProfile = (
+  data: Partial<UserProfile>,
+  fbUser?: FirebaseUser | null
+): UserProfile => {
+  const email = fbUser?.email || data.email || '';
+  const fallbackName =
+    fbUser?.displayName || email.split('@')[0] || 'Campus User';
+  const rawName = (data.name || '').trim();
+  const isLeakedDemoName =
+    !isDemoAccount({ email }) &&
+    (rawName === 'Alex Okafor' || rawName === 'Prof. Adeleke O.');
+  const cleanName = isLeakedDemoName || !rawName ? fallbackName : rawName;
+
+  const rawMatric = (data.matricOrStaffId || '').trim();
+  const isLeakedDemoMatric =
+    !isDemoAccount({ email }) &&
+    (rawMatric === 'CSC/2022/1042' || rawMatric === 'STAFF/CS/2018' || rawMatric === 'CSC/2026/0198');
+
+  const cleanMatric = isLeakedDemoMatric ? '' : rawMatric;
+
+  return {
+    id: fbUser?.uid || data.id || '',
+    name: cleanName,
+    email,
+    role: data.role === 'lecturer' ? 'lecturer' : 'student',
+    department: data.department || 'Computer Science & Engineering',
+    matricOrStaffId: cleanMatric,
+    avatarTag:
+      isLeakedDemoName || !data.avatarTag || data.avatarTag === 'AO' || data.avatarTag === 'PA'
+        ? deriveInitials(cleanName)
+        : data.avatarTag,
+    isProfileComplete: Boolean(data.isProfileComplete || Boolean(cleanMatric)),
+    isDemo: false,
+  };
 };
 
 /**
@@ -204,12 +247,7 @@ export const signInWithFirebaseGoogle = async (): Promise<{
 
   if (userSnap && userSnap.exists()) {
     const existingData = userSnap.data() as UserProfile;
-    const mergedUser: UserProfile = {
-      ...existingData,
-      id: fbUser.uid,
-      email: fbUser.email || existingData.email || '',
-      name: existingData.name || fbUser.displayName || 'Campus User',
-    };
+    const mergedUser = sanitizeRealUserProfile(existingData, fbUser);
     writeLocalUserProfileCache(mergedUser);
     return {
       user: mergedUser,
@@ -217,13 +255,8 @@ export const signInWithFirebaseGoogle = async (): Promise<{
     };
   }
 
-  if (cachedLocal) {
-    const mergedCached: UserProfile = {
-      ...cachedLocal,
-      id: fbUser.uid,
-      email: fbUser.email || cachedLocal.email || '',
-      name: cachedLocal.name || fbUser.displayName || 'Campus User',
-    };
+  if (cachedLocal && !isDemoAccount(cachedLocal)) {
+    const mergedCached = sanitizeRealUserProfile(cachedLocal, fbUser);
     writeLocalUserProfileCache(mergedCached);
     return {
       user: mergedCached,
@@ -233,7 +266,7 @@ export const signInWithFirebaseGoogle = async (): Promise<{
 
   // First-time Google sign-up: create initial user doc in Firestore
   const displayName =
-    fbUser.displayName || fbUser.email?.split('@')[0] || 'Campus Student';
+    fbUser.displayName || fbUser.email?.split('@')[0] || 'Campus User';
   const email = fbUser.email || '';
   const isLecturerHint =
     email.toLowerCase().includes('prof') ||
@@ -246,9 +279,10 @@ export const signInWithFirebaseGoogle = async (): Promise<{
     email,
     role: isLecturerHint ? 'lecturer' : 'student',
     department: 'Computer Science & Engineering',
-    matricOrStaffId: isLecturerHint ? 'STAFF/CS/2018' : 'CSC/2022/1042',
+    matricOrStaffId: '',
     avatarTag: deriveInitials(displayName),
     isProfileComplete: false,
+    isDemo: false,
   };
 
   writeLocalUserProfileCache(initialProfile);
@@ -275,10 +309,14 @@ export const signInWithFirebaseGoogle = async (): Promise<{
 
 /**
  * Persists or updates a UserProfile document in Cloud Firestore (`users/{uid}`).
+ * Demo accounts are never persisted to real Firestore user profiles.
  */
 export const saveUserProfileToFirestore = async (
   profile: UserProfile
 ): Promise<UserProfile> => {
+  if (isDemoAccount(profile)) {
+    return { ...profile, isDemo: true };
+  }
   writeLocalUserProfileCache(profile);
   const services = initFirebaseServices();
   if (!services || !firestoreReachable) {
@@ -291,6 +329,7 @@ export const saveUserProfileToFirestore = async (
       userRef,
       {
         ...profile,
+        isDemo: false,
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -309,32 +348,36 @@ export const fetchUserProfileFromFirestore = async (
 ): Promise<UserProfile | null> => {
   const cachedLocal = readLocalUserProfileCache(uid);
   const services = initFirebaseServices();
-  if (!services) return cachedLocal;
+  if (!services) {
+    return cachedLocal ? sanitizeRealUserProfile(cachedLocal, fbUser) : null;
+  }
 
   const userRef = doc(services.db, 'users', uid);
   const snap = await withFirestoreTimeout(getDoc(userRef), 1800);
   if (snap && snap.exists()) {
     const data = snap.data() as UserProfile;
-    writeLocalUserProfileCache(data);
-    return data;
+    const sanitized = sanitizeRealUserProfile(data, fbUser);
+    writeLocalUserProfileCache(sanitized);
+    return sanitized;
   }
 
-  if (cachedLocal) {
-    return cachedLocal;
+  if (cachedLocal && !isDemoAccount(cachedLocal)) {
+    return sanitizeRealUserProfile(cachedLocal, fbUser);
   }
 
   if (fbUser) {
     const displayName =
-      fbUser.displayName || fbUser.email?.split('@')[0] || 'Campus Student';
+      fbUser.displayName || fbUser.email?.split('@')[0] || 'Campus User';
     const fallback: UserProfile = {
       id: fbUser.uid,
       name: displayName,
       email: fbUser.email || '',
       role: 'student',
       department: 'Computer Science & Engineering',
-      matricOrStaffId: 'CSC/2022/1042',
+      matricOrStaffId: '',
       avatarTag: deriveInitials(displayName),
       isProfileComplete: false,
+      isDemo: false,
     };
     writeLocalUserProfileCache(fallback);
     await withFirestoreTimeout(
@@ -400,7 +443,7 @@ export const getCurrentFirebaseIdToken = async (): Promise<string | null> => {
  * Seeds default courses, announcements, and assignments into Cloud Firestore
  * if the collections are empty on first connect.
  */
-export const MOCK_COURSE_IDS = new Set(['legacy_mock_01']);
+export const MOCK_COURSE_IDS = new Set(['legacy_mock_01', ...DEMO_COURSE_IDS]);
 export const MOCK_ANNOUNCEMENT_IDS = new Set(['legacy_ann_01']);
 export const MOCK_ASSIGNMENT_IDS = new Set(['legacy_asg_01']);
 
@@ -445,7 +488,7 @@ export const subscribeToFirestoreCatalog = (callbacks: {
   onAssignments: (assignments: ClassworkAssignment[]) => void;
 }): (() => void) => {
   const services = initFirebaseServices();
-  if (!services || !firestoreReachable || !services.auth.currentUser) {
+  if (!services || !services.auth.currentUser) {
     return () => { };
   }
 
@@ -460,7 +503,7 @@ export const subscribeToFirestoreCatalog = (callbacks: {
       callbacks.onCourses(list);
     },
     () => {
-      firestoreReachable = false;
+      // ignore snapshot permission/network errors without disabling future writes
     }
   );
 
@@ -480,7 +523,7 @@ export const subscribeToFirestoreCatalog = (callbacks: {
       callbacks.onAnnouncements(list);
     },
     () => {
-      firestoreReachable = false;
+      // ignore
     }
   );
 
@@ -500,7 +543,7 @@ export const subscribeToFirestoreCatalog = (callbacks: {
       callbacks.onAssignments(list);
     },
     () => {
-      firestoreReachable = false;
+      // ignore
     }
   );
 
@@ -513,17 +556,23 @@ export const subscribeToFirestoreCatalog = (callbacks: {
 
 export const saveCourseToFirestore = async (course: CourseModel): Promise<void> => {
   const services = initFirebaseServices();
-  if (!services || !firestoreReachable || !services.auth.currentUser) return;
+  if (!services || !services.auth.currentUser) return;
+  const payload = stripUndefined({
+    ...course,
+    updatedAt: new Date().toISOString(),
+  });
   await withFirestoreTimeout(
-    setDoc(
-      doc(services.db, 'courses', course.id),
-      {
-        ...course,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    ),
-    1500
+    setDoc(doc(services.db, 'courses', course.id), payload, { merge: true }),
+    2500
+  );
+};
+
+export const deleteCourseFromFirestore = async (courseId: string): Promise<void> => {
+  const services = initFirebaseServices();
+  if (!services || !services.auth.currentUser) return;
+  await withFirestoreTimeout(
+    deleteDoc(doc(services.db, 'courses', courseId)),
+    2500
   );
 };
 
@@ -531,17 +580,16 @@ export const saveAnnouncementToFirestore = async (
   announcement: CourseAnnouncement
 ): Promise<void> => {
   const services = initFirebaseServices();
-  if (!services || !firestoreReachable || !services.auth.currentUser) return;
+  if (!services || !services.auth.currentUser) return;
+  const payload = stripUndefined({
+    ...announcement,
+    createdAtIso: new Date().toISOString(),
+  });
   await withFirestoreTimeout(
-    setDoc(
-      doc(services.db, 'announcements', announcement.id),
-      {
-        ...announcement,
-        createdAtIso: new Date().toISOString(),
-      },
-      { merge: true }
-    ),
-    1500
+    setDoc(doc(services.db, 'announcements', announcement.id), payload, {
+      merge: true,
+    }),
+    2500
   );
 };
 

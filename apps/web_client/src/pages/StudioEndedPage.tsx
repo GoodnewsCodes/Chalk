@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowClockwise,
@@ -13,10 +13,52 @@ import { useApp } from '../context/AppContext';
 
 export const StudioEndedPage: React.FC = () => {
   const { roomCode } = useParams<{ roomCode: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { isDark, exportAttendanceReport } = useApp();
+  const { isDark, isDemoMode, courses, currentUser, exportAttendanceReport } = useApp();
 
-  const code = roomCode || 'csc401-algo';
+  const isEnded = searchParams.get('ended') === '1';
+  const endedByLecturer = searchParams.get('by') === 'lecturer';
+
+  const uidLower = (currentUser?.id || '').toLowerCase();
+
+  const myTeachingCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      ((c.lecturerId || '').toLowerCase() === uidLower ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(
+          c.members?.some(
+            (m) => (m.id || '').toLowerCase() === uidLower && m.role === 'lecturer'
+          )
+        ))
+  );
+
+  const myEnrolledCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      (Boolean(c.memberIds?.some((id) => id.toLowerCase() === uidLower)) ||
+        Boolean(
+          c.members?.some(
+            (m) =>
+              (m.id || '').toLowerCase() === uidLower ||
+              (Boolean(m.matricOrStaffId) &&
+                Boolean(currentUser.matricOrStaffId) &&
+                m.matricOrStaffId === currentUser.matricOrStaffId)
+          )
+        ))
+  );
+
+  const roleScopedCourses =
+    currentUser?.role === 'lecturer' ? myTeachingCourses : myEnrolledCourses;
+
+  const code =
+    roomCode ||
+    roleScopedCourses[0]?.liveRoomCode ||
+    (isDemoMode ? 'csc401-algo' : '');
   const [rating, setRating] = useState<number>(5);
   const [feedback, setFeedback] = useState<string>('');
   const [submittedFeedback, setSubmittedFeedback] = useState<boolean>(false);
@@ -45,9 +87,15 @@ export const StudioEndedPage: React.FC = () => {
 
         <div className="space-y-1">
           <h1 className="text-2xl sm:text-3xl font-display font-medium tracking-tight">
-            You left the meeting
+            {isEnded ? 'The studio session has ended' : 'You left the meeting'}
           </h1>
-          <p className="text-xs font-mono opacity-60">Room code: {code}</p>
+          <p className="text-xs opacity-60">
+            {isEnded
+              ? endedByLecturer
+                ? 'You ended the studio session for all participants.'
+                : 'The lecturer has ended this studio session.'
+              : `Room code: ${code}`}
+          </p>
         </div>
 
         {/* Action Buttons */}
@@ -70,14 +118,14 @@ export const StudioEndedPage: React.FC = () => {
           </Link>
         </div>
 
-        {/* Resources / Replay / Attendance */}
+        {/* Resources / Catch Up / Attendance */}
         <div className="pt-4 border-t border-black/10 dark:border-white/10 flex flex-wrap items-center justify-center gap-4 text-xs font-medium">
           <Link
-            to="/replays"
+            to="/catch-up"
             className="inline-flex items-center gap-1.5 text-blue-500 hover:underline"
           >
             <PlayCircle size={16} />
-            <span>View DVR Replays</span>
+            <span>View AI Catch Up</span>
           </Link>
 
           <button
@@ -93,7 +141,7 @@ export const StudioEndedPage: React.FC = () => {
         <div className="pt-4 border-t border-black/10 dark:border-white/10 space-y-3">
           <div className="text-xs font-medium opacity-80">How was the call quality?</div>
           {submittedFeedback ? (
-            <div className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            <div className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
               <CheckCircle size={16} />
               <span>Thank you for your feedback!</span>
             </div>

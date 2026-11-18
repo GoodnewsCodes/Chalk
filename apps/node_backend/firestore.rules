@@ -128,11 +128,19 @@ service cloud.firestore {
           'lecturerName',
           'lecturerId',
           'accentHex',
+          'themeColor',
           'hasLiveSession',
           'liveRoomCode',
           'enrolledCount',
+          'memberIds',
+          'members',
           'scheduleTime',
           'department',
+          'section',
+          'room',
+          'subject',
+          'isArchived',
+          'createdAt',
           'updatedAt'
         ])
         && data.id == courseId
@@ -140,7 +148,7 @@ service cloud.firestore {
         && isValidString(data.title, 1, 120)
         && isValidString(data.lecturerName, 1, 64)
         && isValidString(data.lecturerId, 1, 64)
-        && isValidString(data.accentHex, 4, 9)
+        && isValidString(data.accentHex, 4, 16)
         && data.hasLiveSession is bool
         && isValidString(data.liveRoomCode, 1, 64)
         && data.enrolledCount is number
@@ -148,6 +156,14 @@ service cloud.firestore {
         && data.enrolledCount <= 100000
         && isValidString(data.scheduleTime, 1, 80)
         && isValidString(data.department, 1, 100)
+        && (!('memberIds' in data) || data.memberIds is list)
+        && (!('members' in data) || data.members is list)
+        && (!('isArchived' in data) || data.isArchived is bool)
+        && isOptionalString(data, 'themeColor', 16)
+        && isOptionalString(data, 'section', 64)
+        && isOptionalString(data, 'room', 64)
+        && isOptionalString(data, 'subject', 64)
+        && isOptionalString(data, 'createdAt', 40)
         && isOptionalString(data, 'updatedAt', 40);
     }
 
@@ -277,7 +293,7 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 7. Vector DVR Replays: /replays/{replayId}
+    // 7. Chalk Replays: /replays/{replayId}
     // =========================================================================
 
     match /replays/{replayId} {

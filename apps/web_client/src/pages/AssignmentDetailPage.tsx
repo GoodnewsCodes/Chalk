@@ -41,8 +41,8 @@ export const AssignmentDetailPage: React.FC = () => {
     course?.lecturerId === currentUser?.id ||
     Boolean(
       currentUser?.name &&
-        course?.lecturerName &&
-        course.lecturerName.toLowerCase().includes(currentUser.name.toLowerCase())
+      course?.lecturerName &&
+      course.lecturerName.toLowerCase().includes(currentUser.name.toLowerCase())
     );
 
   const [activeTab, setActiveTab] = useState<'instructions' | 'student_work'>(
@@ -153,9 +153,8 @@ export const AssignmentDetailPage: React.FC = () => {
     <div className="min-h-full flex flex-col">
       {/* Top Header Bar with Tabs */}
       <header
-        className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 shrink-0 ${
-          isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-        }`}
+        className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 shrink-0 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+          }`}
       >
         <div className="flex items-center gap-3 min-w-0">
           <Link
@@ -166,7 +165,7 @@ export const AssignmentDetailPage: React.FC = () => {
             <ArrowLeft size={18} />
           </Link>
           <div className="min-w-0">
-            <div className="text-xs font-mono text-[#059669] dark:text-[#69DB7C] truncate">
+            <div className="text-xs text-[#059669] dark:text-[#69DB7C] truncate">
               {course.code} • {course.title}
             </div>
             <h1 className="text-lg font-medium truncate">{assignment.title}</h1>
@@ -178,25 +177,23 @@ export const AssignmentDetailPage: React.FC = () => {
           <div className="flex items-center gap-1 p-1 rounded-full border border-black/10 dark:border-white/10 text-xs font-medium">
             <button
               onClick={() => setActiveTab('student_work')}
-              className={`px-4 py-1.5 rounded-full cursor-pointer transition-all ${
-                activeTab === 'student_work'
+              className={`px-4 py-1.5 rounded-full cursor-pointer transition-all ${activeTab === 'student_work'
                   ? isDark
                     ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
                     : 'bg-[#059669]/10 text-[#059669]'
                   : 'text-black/60 dark:text-white/60'
-              }`}
+                }`}
             >
               Student Work ({turnedInCount} Turned in)
             </button>
             <button
               onClick={() => setActiveTab('instructions')}
-              className={`px-4 py-1.5 rounded-full cursor-pointer transition-all ${
-                activeTab === 'instructions'
+              className={`px-4 py-1.5 rounded-full cursor-pointer transition-all ${activeTab === 'instructions'
                   ? isDark
                     ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
                     : 'bg-[#059669]/10 text-[#059669]'
                   : 'text-black/60 dark:text-white/60'
-              }`}
+                }`}
             >
               Instructions
             </button>
@@ -214,11 +211,10 @@ export const AssignmentDetailPage: React.FC = () => {
             {/* Left 2 Cols: Description, Question, Rubric, Attachments */}
             <div className="lg:col-span-2 space-y-6">
               <div
-                className={`p-6 rounded-3xl border space-y-4 ${
-                  isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                }`}
+                className={`p-6 rounded-3xl border space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                  }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono pb-2 border-b border-black/10 dark:border-white/10">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-black/10 dark:border-white/10">
                   <span className="text-black/60 dark:text-white/60">
                     Points: {assignment.points}
                   </span>
@@ -240,20 +236,19 @@ export const AssignmentDetailPage: React.FC = () => {
                     </label>
 
                     {assignment.questionType === 'multiple_choice' &&
-                    assignment.questionOptions ? (
+                      assignment.questionOptions ? (
                       <div className="space-y-2">
                         {assignment.questionOptions.map((opt, i) => (
                           <label
                             key={i}
-                            className={`flex items-center gap-3 p-3 rounded-2xl border cursor-pointer text-xs transition-all ${
-                              answerChoice === opt
+                            className={`flex items-center gap-3 p-3 rounded-2xl border cursor-pointer text-xs transition-all ${answerChoice === opt
                                 ? isDark
                                   ? 'border-[#69DB7C] bg-[#69DB7C]/10 text-white'
                                   : 'border-[#059669] bg-[#059669]/5 text-black'
                                 : isDark
                                   ? 'border-[#3C4043] hover:bg-white/5'
                                   : 'border-[#DADCE0] hover:bg-black/5'
-                            }`}
+                              }`}
                           >
                             <input
                               type="radio"
@@ -275,11 +270,10 @@ export const AssignmentDetailPage: React.FC = () => {
                         disabled={mySubmission?.status === 'turned_in' || mySubmission?.status === 'graded'}
                         onChange={(e) => setShortAnswerText(e.target.value)}
                         placeholder="Type your short answer..."
-                        className={`w-full p-3 rounded-2xl border text-xs focus:outline-none ${
-                          isDark
+                        className={`w-full p-3 rounded-2xl border text-xs focus:outline-none ${isDark
                             ? 'bg-[#0F1713] border-[#3C4043] focus:border-[#69DB7C]'
                             : 'bg-[#F8F9FA] border-[#DADCE0] focus:border-[#059669]'
-                        }`}
+                          }`}
                       />
                     )}
                   </div>
@@ -298,9 +292,8 @@ export const AssignmentDetailPage: React.FC = () => {
                           href={att.url}
                           target="_blank"
                           rel="noreferrer"
-                          className={`p-3 rounded-2xl border flex items-center gap-3 text-xs hover:border-[#059669] dark:hover:border-[#69DB7C] transition-colors ${
-                            isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
-                          }`}
+                          className={`p-3 rounded-2xl border flex items-center gap-3 text-xs hover:border-[#059669] dark:hover:border-[#69DB7C] transition-colors ${isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
+                            }`}
                         >
                           <div className="w-8 h-8 rounded-xl bg-[#059669]/10 text-[#059669] dark:text-[#69DB7C] flex items-center justify-center shrink-0">
                             {att.type === 'link' ? <LinkSimple size={16} /> : <FileText size={16} />}
@@ -326,9 +319,8 @@ export const AssignmentDetailPage: React.FC = () => {
                         rub.criteria.map((crit, idx) => (
                           <div
                             key={idx}
-                            className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between gap-4 ${
-                              isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
-                            }`}
+                            className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between gap-4 ${isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
+                              }`}
                           >
                             <div>
                               <div className="font-medium">{crit.title}</div>
@@ -354,20 +346,18 @@ export const AssignmentDetailPage: React.FC = () => {
             <div className="space-y-6">
               {/* "Your Work" Card */}
               <div
-                className={`p-6 rounded-3xl border space-y-4 shadow-sm ${
-                  isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                }`}
+                className={`p-6 rounded-3xl border space-y-4 shadow-sm ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                  }`}
               >
                 <div className="flex items-center justify-between">
                   <h3 className="font-medium text-base">Your work</h3>
                   <span
-                    className={`px-3 py-1 rounded-full text-xs font-mono font-medium capitalize ${
-                      mySubmission?.status === 'graded'
+                    className={`px-3 py-1 rounded-full text-xs font-medium capitalize ${mySubmission?.status === 'graded'
                         ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
                         : mySubmission?.status === 'turned_in'
                           ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400'
                           : 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
-                    }`}
+                      }`}
                   >
                     {mySubmission?.status === 'graded'
                       ? `Graded: ${mySubmission.grade}/${mySubmission.maxPoints}`
@@ -383,9 +373,8 @@ export const AssignmentDetailPage: React.FC = () => {
                     {submissionAttachments.map((att, idx) => (
                       <div
                         key={idx}
-                        className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
-                          isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
-                        }`}
+                        className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${isDark ? 'border-[#3C4043] bg-[#0F1713]' : 'border-[#DADCE0] bg-[#F8F9FA]'
+                          }`}
                       >
                         <div className="flex items-center gap-2 truncate">
                           <Paperclip size={14} className="shrink-0" />
@@ -411,11 +400,10 @@ export const AssignmentDetailPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowAttachModal(true)}
-                    className={`w-full py-2.5 px-4 rounded-full border text-xs font-medium flex items-center justify-center gap-2 cursor-pointer ${
-                      isDark
+                    className={`w-full py-2.5 px-4 rounded-full border text-xs font-medium flex items-center justify-center gap-2 cursor-pointer ${isDark
                         ? 'border-[#3C4043] hover:bg-white/5'
                         : 'border-[#DADCE0] hover:bg-black/5'
-                    }`}
+                      }`}
                   >
                     <Plus size={15} />
                     <span>Add or create work</span>
@@ -427,16 +415,15 @@ export const AssignmentDetailPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleUnsubmit}
-                    className={`w-full py-3 px-4 rounded-full border text-xs font-medium cursor-pointer ${
-                      isDark
+                    className={`w-full py-3 px-4 rounded-full border text-xs font-medium cursor-pointer ${isDark
                         ? 'border-[#3C4043] hover:bg-white/5 text-amber-400'
                         : 'border-[#DADCE0] hover:bg-black/5 text-amber-600'
-                    }`}
+                      }`}
                   >
                     Unsubmit
                   </button>
                 ) : mySubmission?.status === 'graded' ? (
-                  <div className="text-center text-xs font-mono text-emerald-600 dark:text-emerald-400 py-2">
+                  <div className="text-center text-xs text-emerald-600 dark:text-emerald-400 py-2">
                     Submission complete & returned.
                   </div>
                 ) : (
@@ -452,9 +439,8 @@ export const AssignmentDetailPage: React.FC = () => {
 
               {/* Private Comments Thread */}
               <div
-                className={`p-6 rounded-3xl border space-y-4 ${
-                  isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                }`}
+                className={`p-6 rounded-3xl border space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                  }`}
               >
                 <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-black/50 dark:text-white/50">
                   <User size={14} />
@@ -466,17 +452,16 @@ export const AssignmentDetailPage: React.FC = () => {
                     mySubmission.privateComments.map((com) => (
                       <div
                         key={com.id}
-                        className={`p-3 rounded-2xl ${
-                          com.authorRole === 'lecturer'
+                        className={`p-3 rounded-2xl ${com.authorRole === 'lecturer'
                             ? isDark
                               ? 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-200'
                               : 'bg-emerald-50 border border-emerald-200 text-emerald-900'
                             : isDark
                               ? 'bg-black/20 text-white/90'
                               : 'bg-black/5 text-black/90'
-                        }`}
+                          }`}
                       >
-                        <div className="flex items-center justify-between font-mono text-[10px] opacity-70 mb-1">
+                        <div className="flex items-center justify-between text-[10px] opacity-70 mb-1">
                           <span>{com.authorName} ({com.authorRole})</span>
                           <span>{com.timestamp}</span>
                         </div>
@@ -494,11 +479,10 @@ export const AssignmentDetailPage: React.FC = () => {
                     value={privateCommentInput}
                     onChange={(e) => setPrivateCommentInput(e.target.value)}
                     placeholder="Add private comment to teacher..."
-                    className={`flex-1 px-3.5 py-2 rounded-xl border text-xs focus:outline-none ${
-                      isDark
+                    className={`flex-1 px-3.5 py-2 rounded-xl border text-xs focus:outline-none ${isDark
                         ? 'bg-[#0F1713] border-[#3C4043] focus:border-[#69DB7C]'
                         : 'bg-[#F8F9FA] border-[#DADCE0] focus:border-[#059669]'
-                    }`}
+                      }`}
                   />
                   <button
                     type="submit"
@@ -518,13 +502,12 @@ export const AssignmentDetailPage: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Left 1 Col: Student Switcher List */}
             <div
-              className={`p-6 rounded-3xl border space-y-4 ${
-                isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-              }`}
+              className={`p-6 rounded-3xl border space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                }`}
             >
               <div className="flex items-center justify-between pb-3 border-b border-black/10 dark:border-white/10">
                 <h3 className="font-medium text-sm">Student Submissions</h3>
-                <span className="text-xs font-mono opacity-70">
+                <span className="text-xs opacity-70">
                   {assignmentSubmissions.length} enrolled
                 </span>
               </div>
@@ -539,25 +522,23 @@ export const AssignmentDetailPage: React.FC = () => {
                         setSelectedSubmissionId(sub.id);
                         setGradeInput(sub.grade !== undefined ? String(sub.grade) : '');
                       }}
-                      className={`w-full p-3 rounded-2xl flex items-center justify-between text-left text-xs transition-all cursor-pointer ${
-                        selectedSubmission?.id === sub.id
+                      className={`w-full p-3 rounded-2xl flex items-center justify-between text-left text-xs transition-all cursor-pointer ${selectedSubmission?.id === sub.id
                           ? isDark
                             ? 'bg-[#69DB7C]/15 border border-[#69DB7C]/40'
                             : 'bg-[#059669]/10 border border-[#059669]/30'
                           : 'hover:bg-black/5 dark:hover:bg-white/5 border border-transparent'
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div
-                          className={`w-7 h-7 rounded-full flex items-center justify-center font-mono font-medium text-[11px] shrink-0 ${
-                            isDark ? 'bg-white/10' : 'bg-black/5'
-                          }`}
+                          className={`w-7 h-7 rounded-full flex items-center justify-center font-medium text-[11px] shrink-0 ${isDark ? 'bg-white/10' : 'bg-black/5'
+                            }`}
                         >
                           {sub.studentAvatar}
                         </div>
                         <div className="min-w-0">
                           <div className="font-medium truncate">{sub.studentName}</div>
-                          <div className="text-[10px] font-mono opacity-60">
+                          <div className="text-[10px] opacity-60">
                             {sub.matricOrStaffId || 'Student'}
                           </div>
                         </div>
@@ -569,11 +550,11 @@ export const AssignmentDetailPage: React.FC = () => {
                             {sub.grade}/{sub.maxPoints}
                           </span>
                         ) : sub.status === 'turned_in' ? (
-                          <span className="text-[10px] font-mono text-blue-500 font-medium">
+                          <span className="text-[10px] text-blue-500 font-medium">
                             Turned in
                           </span>
                         ) : (
-                          <span className="text-[10px] font-mono text-amber-500 font-medium">
+                          <span className="text-[10px] text-amber-500 font-medium">
                             Assigned
                           </span>
                         )}
@@ -590,21 +571,20 @@ export const AssignmentDetailPage: React.FC = () => {
             <div className="lg:col-span-2 space-y-6">
               {selectedSubmission ? (
                 <div
-                  className={`p-6 rounded-3xl border space-y-6 ${
-                    isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                  }`}
+                  className={`p-6 rounded-3xl border space-y-6 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                    }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-black/10 dark:border-white/10">
                     <div>
                       <h2 className="text-lg font-medium">{selectedSubmission.studentName}</h2>
-                      <div className="text-xs font-mono opacity-60">
+                      <div className="text-xs opacity-60">
                         Submitted: {selectedSubmission.submittedAt || 'Not submitted yet'}
                       </div>
                     </div>
 
                     {/* Inline Grading Form */}
                     <form onSubmit={handleSaveGrade} className="flex items-center gap-3">
-                      <div className="flex items-center gap-1 font-mono text-sm">
+                      <div className="flex items-center gap-1 text-sm">
                         <input
                           type="number"
                           min="0"
@@ -612,11 +592,10 @@ export const AssignmentDetailPage: React.FC = () => {
                           value={gradeInput}
                           onChange={(e) => setGradeInput(e.target.value)}
                           placeholder="Grade"
-                          className={`w-20 px-3 py-1.5 rounded-xl border text-center font-mono focus:outline-none ${
-                            isDark
+                          className={`w-20 px-3 py-1.5 rounded-xl border text-center focus:outline-none ${isDark
                               ? 'bg-[#0F1713] border-[#3C4043] focus:border-[#69DB7C]'
                               : 'bg-[#F8F9FA] border-[#DADCE0] focus:border-[#059669]'
-                          }`}
+                            }`}
                         />
                         <span className="opacity-50">/ {selectedSubmission.maxPoints}</span>
                       </div>
@@ -638,9 +617,8 @@ export const AssignmentDetailPage: React.FC = () => {
 
                     {selectedSubmission.answerText && (
                       <div
-                        className={`p-4 rounded-2xl border text-xs leading-relaxed ${
-                          isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                        }`}
+                        className={`p-4 rounded-2xl border text-xs leading-relaxed ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                          }`}
                       >
                         <div className="font-semibold text-emerald-600 dark:text-emerald-400 mb-1">
                           Written Answer:
@@ -654,14 +632,13 @@ export const AssignmentDetailPage: React.FC = () => {
                         {selectedSubmission.attachments.map((att, i) => (
                           <div
                             key={i}
-                            className={`p-3.5 rounded-2xl border flex items-center gap-3 text-xs ${
-                              isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                            }`}
+                            className={`p-3.5 rounded-2xl border flex items-center gap-3 text-xs ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                              }`}
                           >
                             <Paperclip size={18} className="shrink-0 text-[#059669]" />
                             <div className="truncate">
                               <div className="font-medium truncate">{att.name}</div>
-                              <div className="text-[10px] font-mono opacity-50">{att.type}</div>
+                              <div className="text-[10px] opacity-50">{att.type}</div>
                             </div>
                           </div>
                         ))}
@@ -682,15 +659,14 @@ export const AssignmentDetailPage: React.FC = () => {
                       {selectedSubmission.privateComments.map((c) => (
                         <div
                           key={c.id}
-                          className={`p-3 rounded-2xl ${
-                            c.authorRole === 'lecturer'
+                          className={`p-3 rounded-2xl ${c.authorRole === 'lecturer'
                               ? isDark
                                 ? 'bg-emerald-950/40 text-emerald-200'
                                 : 'bg-emerald-50 text-emerald-900'
                               : isDark
                                 ? 'bg-black/20 text-white/90'
                                 : 'bg-black/5 text-black/90'
-                          }`}
+                            }`}
                         >
                           <div className="flex items-center justify-between text-[10px] opacity-70 mb-1">
                             <span>{c.authorName}</span>
@@ -707,20 +683,18 @@ export const AssignmentDetailPage: React.FC = () => {
                         value={lecturerFeedback}
                         onChange={(e) => setLecturerFeedback(e.target.value)}
                         placeholder="Add private feedback to this student..."
-                        className={`flex-1 px-3.5 py-2 rounded-xl border text-xs focus:outline-none ${
-                          isDark
+                        className={`flex-1 px-3.5 py-2 rounded-xl border text-xs focus:outline-none ${isDark
                             ? 'bg-[#0F1713] border-[#3C4043] focus:border-[#69DB7C]'
                             : 'bg-[#F8F9FA] border-[#DADCE0] focus:border-[#059669]'
-                        }`}
+                          }`}
                       />
                     </div>
                   </div>
                 </div>
               ) : (
                 <div
-                  className={`p-10 rounded-3xl border text-center space-y-2 ${
-                    isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                  }`}
+                  className={`p-10 rounded-3xl border text-center space-y-2 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                    }`}
                 >
                   <p className="text-sm opacity-60">Select a student submission to review.</p>
                 </div>
@@ -735,9 +709,8 @@ export const AssignmentDetailPage: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <form
             onSubmit={handleAddAttachment}
-            className={`w-full max-w-md p-6 rounded-3xl border space-y-4 shadow-2xl ${
-              isDark ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]' : 'bg-white border-[#DADCE0] text-[#202124]'
-            }`}
+            className={`w-full max-w-md p-6 rounded-3xl border space-y-4 shadow-2xl ${isDark ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]' : 'bg-white border-[#DADCE0] text-[#202124]'
+              }`}
           >
             <div className="flex items-center justify-between pb-2 border-b border-black/10 dark:border-white/10">
               <h3 className="font-medium text-sm">Add File or Link</h3>
@@ -759,9 +732,8 @@ export const AssignmentDetailPage: React.FC = () => {
                   value={attachName}
                   onChange={(e) => setAttachName(e.target.value)}
                   placeholder="e.g. solution_report.pdf"
-                  className={`w-full p-2.5 rounded-xl border focus:outline-none ${
-                    isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                  }`}
+                  className={`w-full p-2.5 rounded-xl border focus:outline-none ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                    }`}
                 />
               </div>
 
@@ -772,9 +744,8 @@ export const AssignmentDetailPage: React.FC = () => {
                   value={attachUrl}
                   onChange={(e) => setAttachUrl(e.target.value)}
                   placeholder="https://..."
-                  className={`w-full p-2.5 rounded-xl border focus:outline-none ${
-                    isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
-                  }`}
+                  className={`w-full p-2.5 rounded-xl border focus:outline-none ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
+                    }`}
                 />
               </div>
             </div>

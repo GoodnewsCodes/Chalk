@@ -12,6 +12,7 @@ interface VectorCanvasProps {
   userId?: string;
   userName?: string;
   laser?: LaserPointer | null;
+  onStreamStroke?: (stroke: StrokeData) => void;
   onCommitStroke?: (stroke: StrokeData) => void;
   onEmitLaser?: (x: number, y: number, active: boolean) => void;
   className?: string;
@@ -29,6 +30,7 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
   userId = 'usr_guest',
   userName = 'Prof. Adeleke O.',
   laser = null,
+  onStreamStroke,
   onCommitStroke,
   onEmitLaser,
   className = '',
@@ -39,6 +41,8 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
   const [draftPoints, setDraftPoints] = useState<VectorPoint[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 500 });
+  const draftStrokeIdRef = useRef<string | null>(null);
+  const lastStreamEmitRef = useRef<number>(0);
 
   // Resize observer for sharp retina rendering
   useEffect(() => {
@@ -57,6 +61,18 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  // Immediately clear active laser or stroke when interactive access is revoked
+  useEffect(() => {
+    if (!interactive && isDrawing) {
+      setIsDrawing(false);
+      setDraftPoints([]);
+      draftStrokeIdRef.current = null;
+      if (currentTool === 'laser') {
+        onEmitLaser?.(0, 0, false);
+      }
+    }
+  }, [interactive, isDrawing, currentTool, onEmitLaser]);
 
   // Render canvas
   useEffect(() => {
@@ -88,19 +104,13 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
       }
     }
 
-    // 3. Slide Watermark & Reference Diagram Annotations
-    if (showWatermark) {
-      ctx.save();
-      ctx.font = '500 11px "Google Sans Mono", "Roboto Mono", monospace';
-      ctx.fillStyle = 'rgba(248, 249, 250, 0.28)';
-      ctx.textAlign = 'right';
-      ctx.fillText(`VECTOR CANVAS • SLIDE ${activeSlideIndex + 1}`, w - 18, 24);
-      ctx.restore();
-    }
+    // 3. Reference Diagram Annotations
 
     // Helpful labels when viewing default graph strokes on Slide 1
     const slideStrokes = strokes.filter(
-      (s) => s.slideIndex === undefined || s.slideIndex === activeSlideIndex
+      (s) =>
+        (s.slideIndex === undefined || s.slideIndex === activeSlideIndex) &&
+        !(isDrawing && draftStrokeIdRef.current && s.id === draftStrokeIdRef.current)
     );
 
     const hasSeedGraph = slideStrokes.some((s) => s.id === 'seed_1');
@@ -216,6 +226,17 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
         }
       }
 
+      // Live remote drawer indicator while stroke is actively streaming
+      if (stroke.isComplete === false && stroke.userId !== userId && stroke.userName) {
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = stroke.tool === 'eraser' ? '#69DB7C' : stroke.color;
+        ctx.beginPath();
+        ctx.arc(endX, endY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = '500 10px "Google Sans Mono", "Roboto Mono", monospace';
+        ctx.fillText(stroke.userName, endX + 8, endY + 3);
+      }
+
       ctx.restore();
     };
 
@@ -295,8 +316,25 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
       return;
     }
 
+    const strokeId = `stk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    draftStrokeIdRef.current = strokeId;
+    lastStreamEmitRef.current = Date.now();
     setIsDrawing(true);
     setDraftPoints([pt]);
+
+    onStreamStroke?.({
+      id: strokeId,
+      roomId,
+      userId,
+      userName,
+      timestamp: Date.now(),
+      tool: currentTool,
+      color: currentColor,
+      width: currentWidth,
+      points: [pt],
+      slideIndex: activeSlideIndex,
+      isComplete: false,
+    });
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -308,7 +346,27 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
       return;
     }
 
-    setDraftPoints((prev) => [...prev, pt]);
+    setDraftPoints((prev) => {
+      const next = [...prev, pt];
+      const now = Date.now();
+      if (now - lastStreamEmitRef.current >= 30 && draftStrokeIdRef.current) {
+        lastStreamEmitRef.current = now;
+        onStreamStroke?.({
+          id: draftStrokeIdRef.current,
+          roomId,
+          userId,
+          userName,
+          timestamp: now,
+          tool: currentTool,
+          color: currentColor,
+          width: currentWidth,
+          points: next,
+          slideIndex: activeSlideIndex,
+          isComplete: false,
+        });
+      }
+      return next;
+    });
   };
 
   const handlePointerUp = () => {
@@ -320,9 +378,14 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
       return;
     }
 
+    const finalStrokeId =
+      draftStrokeIdRef.current ||
+      `stk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    draftStrokeIdRef.current = null;
+
     if (draftPoints.length > 0) {
       const committed: StrokeData = {
-        id: `stk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: finalStrokeId,
         roomId,
         userId,
         userName,
@@ -332,6 +395,7 @@ export const VectorCanvas: React.FC<VectorCanvasProps> = ({
         width: currentWidth,
         points: draftPoints,
         slideIndex: activeSlideIndex,
+        isComplete: true,
       };
       onCommitStroke?.(committed);
     }

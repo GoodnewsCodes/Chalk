@@ -15,6 +15,7 @@ import {
   Waveform,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
+import { ChalkLogo } from '../components/ChalkLogo';
 
 export const StudioLobbyPage: React.FC = () => {
   const { roomCode } = useParams<{ roomCode: string }>();
@@ -23,11 +24,13 @@ export const StudioLobbyPage: React.FC = () => {
 
   const {
     isDark,
+    isDemoMode,
     currentUser,
     guestName,
     setGuestName,
     courses,
     liveRooms,
+    activeRoomCode,
     setActiveRoomCode,
     prejoinCam,
     setPrejoinCam,
@@ -37,7 +40,52 @@ export const StudioLobbyPage: React.FC = () => {
     setPrejoinBlur,
   } = useApp();
 
-  const code = roomCode || 'csc401-algo';
+  const isRealUser = Boolean(currentUser && !isDemoMode);
+  const uidLower = (currentUser?.id || '').toLowerCase();
+
+  const myTeachingCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      ((c.lecturerId || '').toLowerCase() === uidLower ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(
+          c.members?.some(
+            (m) => (m.id || '').toLowerCase() === uidLower && m.role === 'lecturer'
+          )
+        ))
+  );
+
+  const myEnrolledCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      (Boolean(c.memberIds?.some((id) => id.toLowerCase() === uidLower)) ||
+        Boolean(
+          c.members?.some(
+            (m) =>
+              (m.id || '').toLowerCase() === uidLower ||
+              (Boolean(m.matricOrStaffId) &&
+                Boolean(currentUser.matricOrStaffId) &&
+                m.matricOrStaffId === currentUser.matricOrStaffId)
+          )
+        ))
+  );
+
+  const roleScopedCourses =
+    currentUser?.role === 'lecturer' ? myTeachingCourses : myEnrolledCourses;
+
+  const isRealUserWithoutCourse = isRealUser && roleScopedCourses.length === 0;
+
+  const code = isRealUser
+    ? isRealUserWithoutCourse
+      ? ''
+      : roomCode || activeRoomCode || roleScopedCourses[0]?.liveRoomCode || ''
+    : roomCode ||
+      activeRoomCode ||
+      roleScopedCourses[0]?.liveRoomCode ||
+      (isDemoMode || !currentUser ? 'csc401-algo' : 'live-studio');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [micLevel, setMicLevel] = useState<number>(0);
@@ -49,7 +97,7 @@ export const StudioLobbyPage: React.FC = () => {
   const [copiedLink, setCopiedLink] = useState(false);
 
   // Match course or live room metadata
-  const matchedCourse = courses.find(
+  const matchedCourse = roleScopedCourses.find(
     (c) =>
       c.liveRoomCode.toLowerCase() === code.toLowerCase() ||
       c.id.toLowerCase() === code.toLowerCase()
@@ -67,7 +115,13 @@ export const StudioLobbyPage: React.FC = () => {
   const hostName =
     matchedCourse?.lecturerName ||
     matchedLiveRoom?.lecturerName ||
-    'Chalk Lecturer';
+    (currentUser?.role === 'lecturer' ? currentUser.name : 'Chalk Lecturer');
+
+  useEffect(() => {
+    if (isRealUserWithoutCourse) {
+      navigate(currentUser?.role === 'lecturer' ? '/hub?create=1' : '/hub?join=1', { replace: true });
+    }
+  }, [isRealUserWithoutCourse, currentUser?.role, navigate]);
 
   // Request local camera and microphone stream for preview
   useEffect(() => {
@@ -183,9 +237,12 @@ export const StudioLobbyPage: React.FC = () => {
     >
       {/* Top Bar */}
       <header className="h-16 px-6 flex items-center justify-between border-b border-black/10 dark:border-white/10 shrink-0">
-        <Link to="/hub" className="flex items-center gap-2">
+        <Link to="/hub" className="flex items-center gap-3">
           <ArrowLeft size={18} />
-          <span className="font-display font-medium text-base">Chalkboard Studio</span>
+          <div className="flex items-center gap-2">
+            <ChalkLogo className="h-5 w-auto" />
+            <span className="text-xs opacity-50 uppercase tracking-widest">Studio</span>
+          </div>
         </Link>
         <button
           onClick={() => setShowSettings(!showSettings)}
@@ -219,7 +276,7 @@ export const StudioLobbyPage: React.FC = () => {
               />
             ) : (
               <div className="flex flex-col items-center gap-3 text-white/80">
-                <div className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center text-2xl font-mono font-medium">
+                <div className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center text-2xl font-medium">
                   {currentUser?.avatarTag || 'YOU'}
                 </div>
                 <span className="text-xs font-medium">Camera is off</span>
@@ -283,7 +340,7 @@ export const StudioLobbyPage: React.FC = () => {
 
             {/* Mic Level Visualizer Pill (Top-Right inside video) */}
             {prejoinMic && (
-              <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 text-white text-[11px] font-mono backdrop-blur-md">
+              <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 text-white text-[11px] backdrop-blur-md">
                 <Waveform size={14} className="text-emerald-400" />
                 <div className="w-12 h-1.5 rounded-full bg-white/20 overflow-hidden">
                   <div
@@ -303,13 +360,13 @@ export const StudioLobbyPage: React.FC = () => {
         {/* Right: Studio Info, Attendees, Join Actions */}
         <div className="w-full lg:w-2/5 space-y-6">
           <div className="space-y-2">
-            <div className="text-xs font-mono font-medium text-[#059669] dark:text-[#69DB7C]">
+            <div className="text-xs font-medium text-[#059669] dark:text-[#69DB7C]">
               Ready to join?
             </div>
             <h2 className="text-2xl sm:text-3xl font-display font-medium tracking-tight">
               {meetingTitle}
             </h2>
-            <p className="text-xs font-mono opacity-60">
+            <p className="text-xs opacity-60">
               Host: {hostName} • Code: {code}
             </p>
           </div>
@@ -375,7 +432,7 @@ export const StudioLobbyPage: React.FC = () => {
           <div className="pt-2">
             <button
               onClick={handleCopyLink}
-              className="inline-flex items-center gap-2 text-xs font-mono text-[#059669] dark:text-[#69DB7C] hover:underline cursor-pointer"
+              className="inline-flex items-center gap-2 text-xs text-[#059669] dark:text-[#69DB7C] hover:underline cursor-pointer"
             >
               {copiedLink ? <Check size={14} /> : <Copy size={14} />}
               <span>{copiedLink ? 'Copied joining link!' : 'Copy joining information'}</span>

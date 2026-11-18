@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AppProvider, useApp } from './context/AppContext';
 import { AppShell } from './components/AppShell';
 import { LandingPage } from './pages/LandingPage';
+import { FaqPage } from './pages/FaqPage';
 import { AuthPage } from './pages/AuthPage';
 import { ClassroomHubPage } from './pages/ClassroomHubPage';
 import { CourseDetailPage } from './pages/CourseDetailPage';
@@ -13,7 +14,7 @@ import { ClassroomSettingsPage } from './pages/ClassroomSettingsPage';
 import { StudioPage } from './pages/StudioPage';
 import { StudioLobbyPage } from './pages/StudioLobbyPage';
 import { StudioEndedPage } from './pages/StudioEndedPage';
-import { ReplaysPage } from './pages/ReplaysPage';
+import { CatchUpPage } from './pages/CatchUpPage';
 import { StudyHubPage } from './pages/StudyHubPage';
 import { BenchmarksPage } from './pages/BenchmarksPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -25,7 +26,7 @@ const RequireAuth: React.FC<{ children: React.ReactElement }> = ({ children }) =
   if (authLoading) {
     return (
       <div
-        className={`min-h-[100dvh] flex items-center justify-center font-mono text-xs ${isDark ? 'bg-[#0F1713] text-[#69DB7C]' : 'bg-[#F8F9FA] text-[#059669]'
+        className={`min-h-[100dvh] flex items-center justify-center text-xs ${isDark ? 'bg-[#0F1713] text-[#69DB7C]' : 'bg-[#F8F9FA] text-[#059669]'
           }`}
       >
         Signing in...
@@ -54,6 +55,7 @@ export const App: React.FC = () => {
         <Routes>
           {/* Standalone Full-Viewport Routes */}
           <Route path="/" element={<LandingPage />} />
+          <Route path="/faq" element={<FaqPage />} />
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/studio" element={<StudioPage />} />
           <Route path="/studio/:roomCode" element={<StudioPage />} />
@@ -78,8 +80,10 @@ export const App: React.FC = () => {
               path="/hub/course/:courseId/assignment/:assignmentId"
               element={<AssignmentDetailPage />}
             />
-            <Route path="/replays" element={<ReplaysPage />} />
-            <Route path="/replays/:replayId" element={<ReplaysPage />} />
+            <Route path="/catch-up" element={<CatchUpPage />} />
+            <Route path="/catch-up/:sessionId" element={<CatchUpPage />} />
+            <Route path="/replays" element={<Navigate to="/catch-up" replace />} />
+            <Route path="/replays/:replayId" element={<Navigate to="/catch-up" replace />} />
             <Route path="/study" element={<StudyHubPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />
           </Route>

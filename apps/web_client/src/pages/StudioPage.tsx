@@ -44,6 +44,8 @@ import {
   Waveform,
   Record,
   ChartBar,
+  GraduationCap,
+  Hash,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
 import { VectorCanvas } from '../components/VectorCanvas';
@@ -51,6 +53,7 @@ import { CatchUpModal } from '../components/CatchUpModal';
 import { LiveKitConference } from '../components/LiveKitConference';
 import { fetchLiveKitToken } from '../lib/livekit';
 import { StudioParticipant, NetworkProfile, StrokeTool, VideoMode } from '../types/chalk';
+import { ChalkLogo } from '../components/ChalkLogo';
 
 const CHALK_PALETTE = [
   '#69DB7C',
@@ -68,6 +71,7 @@ export const StudioPage: React.FC = () => {
 
   const {
     isDark,
+    isDemoMode,
     isAuthenticated,
     currentUser,
     guestName,
@@ -77,6 +81,8 @@ export const StudioPage: React.FC = () => {
     activeRoomCode,
     setActiveRoomCode,
     activeRoomInfo,
+    endStudioSession,
+    sessionEndedRoom,
     selfSocketId,
     participants,
     chatMessages,
@@ -104,6 +110,7 @@ export const StudioPage: React.FC = () => {
     addSlide,
     laser,
     emitLaser,
+    streamStroke,
     commitStroke,
     canUndo,
     canRedo,
@@ -147,13 +154,79 @@ export const StudioPage: React.FC = () => {
     updateHostSettings,
   } = useApp();
 
-  const code = roomCode || activeRoomCode || 'csc401-algo';
+  const isRealUser = Boolean(currentUser && !isDemoMode);
+  const isLecturer = currentUser?.role === 'lecturer';
+  const uidLower = (currentUser?.id || '').toLowerCase();
+
+  const myTeachingCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      ((c.lecturerId || '').toLowerCase() === uidLower ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(
+          c.members?.some(
+            (m) => (m.id || '').toLowerCase() === uidLower && m.role === 'lecturer'
+          )
+        ))
+  );
+
+  const myEnrolledCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      (Boolean(c.memberIds?.some((id) => id.toLowerCase() === uidLower)) ||
+        Boolean(
+          c.members?.some(
+            (m) =>
+              (m.id || '').toLowerCase() === uidLower ||
+              (Boolean(m.matricOrStaffId) &&
+                Boolean(currentUser.matricOrStaffId) &&
+                m.matricOrStaffId === currentUser.matricOrStaffId)
+          )
+        ))
+  );
+
+  const roleScopedCourses =
+    currentUser?.role === 'lecturer' ? myTeachingCourses : myEnrolledCourses;
+
+  const isFallbackRoomCode = (val?: string) => {
+    if (!val) return true;
+    const lower = val.trim().toLowerCase();
+    return (
+      lower === 'live-studio' ||
+      lower === 'csc401-algo' ||
+      lower === 'csc412-compilers' ||
+      lower === 'mth304-linear' ||
+      /^lecture-\d+$/.test(lower)
+    );
+  };
+
+  const isRealUserWithoutCourse = isRealUser && roleScopedCourses.length === 0;
+
+  const resolvedRoomCode = isRealUser
+    ? roomCode && !isFallbackRoomCode(roomCode)
+      ? roomCode
+      : activeRoomCode && !isFallbackRoomCode(activeRoomCode)
+        ? activeRoomCode
+        : roleScopedCourses[0]?.liveRoomCode || ''
+    : roomCode ||
+    activeRoomCode ||
+    roleScopedCourses[0]?.liveRoomCode ||
+    (isDemoMode || !currentUser ? 'csc401-algo' : 'live-studio');
+
+  const code = isRealUserWithoutCourse ? '' : resolvedRoomCode;
 
   useEffect(() => {
+    if (isRealUserWithoutCourse) {
+      if (activeRoomCode) setActiveRoomCode('');
+      return;
+    }
     if (code && code !== activeRoomCode) {
       setActiveRoomCode(code);
     }
-  }, [code, activeRoomCode, setActiveRoomCode]);
+  }, [code, activeRoomCode, setActiveRoomCode, isRealUserWithoutCourse]);
 
   // Initial mute preference
   useEffect(() => {
@@ -177,6 +250,7 @@ export const StudioPage: React.FC = () => {
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [isCatchUpOpen, setIsCatchUpOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -217,6 +291,13 @@ export const StudioPage: React.FC = () => {
           };
         }
         setIsScreenSharing(true);
+        if (stageLayout === 'whiteboard') {
+          setStageLayout('tiled');
+          if (isMeLecturer) {
+            setLecturerStageLayout('tiled');
+            broadcastStageLayout('tiled', code);
+          }
+        }
       } catch (err) {
         console.warn('Screen share canceled or denied:', err);
         setIsScreenSharing(false);
@@ -243,6 +324,21 @@ export const StudioPage: React.FC = () => {
   }, [stageLayout]);
 
   useEffect(() => {
+    const onRemoteBoardRx = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        (detail?.event === 'change_stage_layout' || detail?.event === 'stage_layout_changed') &&
+        detail?.payload?.stageLayout
+      ) {
+        const nextLayout = detail.payload.stageLayout === 'whiteboard' ? 'whiteboard' : 'tiled';
+        setLecturerStageLayout(nextLayout);
+      }
+    };
+    window.addEventListener('chalk:board:rx', onRemoteBoardRx);
+    return () => window.removeEventListener('chalk:board:rx', onRemoteBoardRx);
+  }, []);
+
+  useEffect(() => {
     // Show initially for 3 seconds on load
     controlsTimeoutRef.current = setTimeout(() => {
       setIsControlsVisible(false);
@@ -265,10 +361,10 @@ export const StudioPage: React.FC = () => {
   const displayParticipants: StudioParticipant[] =
     participants.length > 0
       ? participants.map((p) =>
-          p.socketId === selfSocketId || (currentUser?.id && p.id === currentUser.id)
-            ? { ...p, handRaised: isHandRaised }
-            : p
-        )
+        p.socketId === selfSocketId || (currentUser?.id && p.id === currentUser.id)
+          ? { ...p, handRaised: isHandRaised }
+          : p
+      )
       : [
         {
           id: currentUser?.id || 'me',
@@ -299,6 +395,7 @@ export const StudioPage: React.FC = () => {
 
   // LiveKit Token
   useEffect(() => {
+    if (!code || isRealUserWithoutCourse) return;
     let active = true;
     const fetchToken = async () => {
       try {
@@ -323,7 +420,7 @@ export const StudioPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [code, currentUser?.id, currentUser?.name, guestName, guestId, selfSocketId]);
+  }, [code, isRealUserWithoutCourse, currentUser?.id, currentUser?.name, guestName, guestId, selfSocketId]);
 
   // PiP local video
   useEffect(() => {
@@ -394,7 +491,20 @@ export const StudioPage: React.FC = () => {
   };
 
   const handleLeaveCall = () => {
+    if (displayStreamRef.current) {
+      displayStreamRef.current.getTracks().forEach((t) => t.stop());
+      displayStreamRef.current = null;
+    }
     navigate(`/studio/${encodeURIComponent(code)}/ended`);
+  };
+
+  const handleEndCall = async () => {
+    if (displayStreamRef.current) {
+      displayStreamRef.current.getTracks().forEach((t) => t.stop());
+      displayStreamRef.current = null;
+    }
+    await endStudioSession(code);
+    navigate(`/studio/${encodeURIComponent(code)}/ended?ended=1&by=lecturer`);
   };
 
   const tools: { id: StrokeTool; label: string; icon: React.ElementType }[] = [
@@ -412,20 +522,31 @@ export const StudioPage: React.FC = () => {
     participants.find((p) => speakingMap[p.socketId]) || activeLecturer || participants[0];
 
   const effectiveTitle = activeRoomInfo.title || `Room ${code}`;
-  const isMeLecturer =
-    currentUser?.role === 'lecturer' ||
-    (Boolean(currentUser?.name) &&
-      activeRoomInfo.lecturerName?.toLowerCase() === currentUser?.name?.toLowerCase()) ||
-    Boolean(
+  const isMeLecturer = currentUser
+    ? currentUser.role === 'lecturer'
+    : Boolean(
       displayParticipants.find(
-        (p) =>
-          (p.socketId === selfSocketId || p.id === currentUser?.id) &&
-          p.role === 'lecturer'
+        (p) => p.socketId === selfSocketId && p.role === 'lecturer'
       )
-    ) ||
-    (displayParticipants.length > 0 &&
-      displayParticipants[0]?.socketId === selfSocketId &&
-      !displayParticipants.some((p) => p.role === 'lecturer'));
+    );
+
+  const isHostLecturer = Boolean(
+    isMeLecturer && (
+      (activeRoomInfo.hostUserId && (currentUser?.id === activeRoomInfo.hostUserId || guestId === activeRoomInfo.hostUserId)) ||
+      (activeRoomInfo.lecturerId && currentUser?.id === activeRoomInfo.lecturerId) ||
+      !activeRoomInfo.hostUserId
+    )
+  );
+
+  useEffect(() => {
+    if (sessionEndedRoom && sessionEndedRoom.toLowerCase() === code.toLowerCase()) {
+      if (displayStreamRef.current) {
+        displayStreamRef.current.getTracks().forEach((t) => t.stop());
+        displayStreamRef.current = null;
+      }
+      navigate(`/studio/${encodeURIComponent(code)}/ended?ended=1`);
+    }
+  }, [sessionEndedRoom, code, navigate]);
   const myParticipant = displayParticipants.find(
     (p) => p.socketId === selfSocketId || p.id === currentUser?.id
   );
@@ -434,11 +555,132 @@ export const StudioPage: React.FC = () => {
   const hasMicAccess =
     isMeLecturer || hostSettings.turnMicAllowed || Boolean(myParticipant?.canSpeak);
 
+  // When a student is given chalkboard access, default their active tool to laser;
+  // when revoked, immediately clear their laser from the canvas
+  const prevChalkboardAccessRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!isMeLecturer) {
+      if (hasChalkboardAccess && !prevChalkboardAccessRef.current) {
+        setCurrentTool('laser');
+      } else if (!hasChalkboardAccess) {
+        if (prevChalkboardAccessRef.current) {
+          emitLaser(0, 0, false);
+        }
+        if (currentTool !== 'laser') {
+          setCurrentTool('laser');
+        }
+      }
+    }
+    prevChalkboardAccessRef.current = hasChalkboardAccess;
+  }, [hasChalkboardAccess, isMeLecturer, setCurrentTool, currentTool, emitLaser]);
+
+  // Hide chalkboard automatically when screen share starts
+  useEffect(() => {
+    if (isScreenSharing && stageLayout === 'whiteboard') {
+      setStageLayout('tiled');
+      if (isMeLecturer) {
+        setLecturerStageLayout('tiled');
+        broadcastStageLayout('tiled', code);
+      }
+    }
+  }, [isScreenSharing, stageLayout, isMeLecturer, setStageLayout, broadcastStageLayout, code]);
+
   // Filtered attendees for people panel
   const filteredParticipants = displayParticipants.filter((p) =>
     p.name.toLowerCase().includes(attendeeSearch.toLowerCase())
   );
   const raisedHandsQueue = displayParticipants.filter((p) => p.handRaised);
+
+  if (isRealUserWithoutCourse || (isRealUser && !code)) {
+    return (
+      <div
+        className={`min-h-screen w-screen flex flex-col ${isDark ? 'bg-[#0F1713] text-[#E3E3E3]' : 'bg-[#F8F9FA] text-[#202124]'
+          }`}
+      >
+        <header
+          className={`h-16 px-6 flex items-center justify-between border-b shrink-0 ${isDark ? 'bg-[#141E19] border-[#3C4043]/60' : 'bg-white border-[#DADCE0]'
+            }`}
+        >
+          <Link to="/hub" className="flex items-center gap-2.5">
+            <ChalkLogo className="h-8 w-auto" />
+          </Link>
+          <Link
+            to="/hub"
+            className={`btn-google px-4 py-2 rounded-full border text-xs font-medium inline-flex items-center gap-1.5 ${isDark
+              ? 'border-[#3C4043] bg-[#0F1713] text-[#E3E3E3] hover:bg-[#28292A]'
+              : 'border-[#DADCE0] bg-white text-[#202124] hover:bg-[#F8F9FA]'
+              }`}
+          >
+            <CaretLeft size={14} />
+            <span>{isLecturer ? 'Back to Lecturer Dashboard' : 'Back to Student Dashboard'}</span>
+          </Link>
+        </header>
+
+        <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <div
+            className={`w-full max-w-lg rounded-3xl border p-8 sm:p-10 text-center space-y-5 shadow-xl ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+              }`}
+          >
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-[#69DB7C]/15 border border-[#69DB7C]/30 flex items-center justify-center text-[#059669] dark:text-[#69DB7C]">
+              {isLecturer ? (
+                <ChalkboardTeacher size={32} weight="regular" />
+              ) : (
+                <GraduationCap size={32} weight="regular" />
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <h1 className="font-display text-2xl font-medium tracking-tight">
+                {isLecturer
+                  ? 'Create a Course First to Launch Live Studio'
+                  : 'Enroll in a Class First to Join Live Studio'}
+              </h1>
+              <p
+                className={`text-xs sm:text-sm leading-relaxed ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                  }`}
+              >
+                {isLecturer
+                  ? "You haven't created or added any teaching course yet. Create your course cohort first to generate a dedicated Live Studio room and student enrollment code."
+                  : "You haven't joined or enrolled in any course yet. Enter your lecturer's class enrollment code first to access its Live Studio room."}
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <Link
+                to={isLecturer ? '/hub?create=1' : '/hub?join=1'}
+                className={`btn-google w-full sm:w-auto px-6 py-3 rounded-full text-xs font-semibold inline-flex items-center justify-center gap-2 shadow-sm ${isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+                  }`}
+              >
+                {isLecturer ? (
+                  <>
+                    <Plus size={16} weight="bold" />
+                    <span>Create Your First Course</span>
+                  </>
+                ) : (
+                  <>
+                    <Hash size={16} weight="bold" />
+                    <span>Join Class with Code</span>
+                  </>
+                )}
+              </Link>
+
+              <Link
+                to="/hub"
+                className={`btn-google w-full sm:w-auto px-5 py-3 rounded-full border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${isDark
+                  ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
+                  : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
+                  }`}
+              >
+                <span>Return to Dashboard</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -454,7 +696,7 @@ export const StudioPage: React.FC = () => {
             style={{ left: `${rx.x}%` }}
           >
             <span className="text-4xl filter drop-shadow-md">{rx.emoji}</span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-black/70 text-white/90 backdrop-blur-xs mt-1">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/70 text-white/90 backdrop-blur-xs mt-1">
               {rx.senderName}
             </span>
           </div>
@@ -474,15 +716,15 @@ export const StudioPage: React.FC = () => {
           </Link>
           <div className="min-w-0">
             <h1 className="text-sm font-medium truncate text-white">{effectiveTitle}</h1>
-            <div className="text-[11px] font-mono opacity-60 truncate">
-              {activeRoomInfo.courseCode ? `${activeRoomInfo.courseCode} • ` : ''}
-              {code}
+            <div className="text-[11px] opacity-60 truncate">
+              {activeRoomInfo.courseCode ? `${activeRoomInfo.courseCode}` : ''}
+
             </div>
           </div>
 
           {/* Recording Badge */}
           {isRecording && (
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-600/20 text-red-400 text-xs font-mono font-medium border border-red-500/30 animate-pulse ml-2">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-600/20 text-red-400 text-xs font-medium border border-red-500/30 animate-pulse ml-2">
               <span className="w-2 h-2 rounded-full bg-red-500" />
               <span>
                 REC {Math.floor(recordingSeconds / 60)}:
@@ -493,23 +735,23 @@ export const StudioPage: React.FC = () => {
         </div>
 
         {/* Center: Chalk Anti-Lag QoS & Bandwidth Meter HUD */}
-        <div className="hidden md:flex items-center gap-3 px-3 py-1 rounded-full bg-white/5 border border-white/10 font-mono text-[11px]">
-          <span className="flex items-center gap-1.5 text-[#69DB7C] font-medium">
+        <div className="hidden md:flex items-center gap-3 px-3 py-1 text-[11px]">
+          <span className="flex items-center gap-1.5 text-[#69DB7C]/80 font-medium">
             <WifiHigh size={14} />
-            <span>Chalk</span>
           </span>
-          <span className="opacity-40">•</span>
-          <span className="text-[#69DB7C] font-semibold">{savingsPercentage.toFixed(1)}% saved</span>
+          <span className="text-[#69DB7C]/80 font-semibold">{savingsPercentage.toFixed(1)}% saved</span>
         </div>
 
         {/* Right: "Catch Me Up!" Pill + Panel Toggle Buttons */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => setIsCatchUpOpen(true)}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#69DB7C]/15 text-[#69DB7C] hover:bg-[#69DB7C]/25 border border-[#69DB7C]/30 cursor-pointer"
+            title="AI Catch Me Up! — Summarize session from start to now"
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium bg-[#69DB7C]/15 text-[#69DB7C] hover:bg-[#69DB7C]/25 border border-[#69DB7C]/30 cursor-pointer"
           >
-            <Sparkle size={14} />
-            <span>Catch Me Up!</span>
+            <Sparkle size={14} weight="fill" />
+            <span className="hidden xs:inline sm:inline">Catch Me Up!</span>
+            <span className="inline xs:hidden sm:hidden">Catch Up</span>
           </button>
 
           {/* Details Button */}
@@ -603,12 +845,16 @@ export const StudioPage: React.FC = () => {
               isMeLecturer={isMeLecturer}
               onLowerHand={lowerHand}
               onGrantPermission={grantParticipantPermission}
-              stageMode={stageLayout === 'whiteboard' ? 'whiteboard' : 'speakers'}
+              stageMode={stageLayout === 'whiteboard' && !isScreenSharing ? 'whiteboard' : 'speakers'}
               isHandRaised={isHandRaised}
+              onDisconnected={handleLeaveCall}
               onStageModeChange={(mode) => {
                 const targetLayout = mode === 'whiteboard' ? 'whiteboard' : 'tiled';
                 setStageLayout(targetLayout);
                 setLecturerStageLayout(targetLayout);
+                if (isMeLecturer) {
+                  broadcastStageLayout(targetLayout, code);
+                }
               }}
             >
               {/* STAGE: CHALKBOARD VIEW (Rendered inside LiveKitConference when in whiteboard mode) */}
@@ -620,13 +866,17 @@ export const StudioPage: React.FC = () => {
                   currentWidth={currentWidth}
                   activeSlideIndex={activeSlideIndex}
                   interactive={hasChalkboardAccess}
+                  roomId={code}
+                  userId={currentUser?.id || guestId}
+                  userName={currentUser?.name || guestName || 'Participant'}
                   laser={laser}
+                  onStreamStroke={streamStroke}
                   onCommitStroke={commitStroke}
                   onEmitLaser={emitLaser}
                 />
 
                 {/* Multi-Slide Navigation Deck Controller */}
-                <div className="absolute top-4 left-4 z-20 flex items-center gap-2 p-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 text-xs font-mono text-white">
+                <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 text-xs text-white">
                   <button
                     onClick={prevSlide}
                     disabled={activeSlideIndex === 0 || !hasChalkboardAccess}
@@ -662,48 +912,68 @@ export const StudioPage: React.FC = () => {
 
                 {/* Chalkboard Floating Drawing Toolbar (or View-Only indicator) */}
                 {hasChalkboardAccess ? (
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1.5 p-2 rounded-2xl bg-black/70 backdrop-blur-md border border-white/15 text-white shadow-xl">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1 p-1.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white shadow-xl max-h-[calc(100%-2rem)]">
                     {tools.map((t) => {
                       const Icon = t.icon;
                       const isActive = currentTool === t.id;
                       return (
                         <button
                           key={t.id}
-                          onClick={() => setCurrentTool(t.id)}
-                          className={`p-2.5 rounded-xl transition-all cursor-pointer ${isActive
+                          onClick={() => {
+                            setCurrentTool(t.id);
+                            setIsColorPickerOpen(false);
+                          }}
+                          className={`p-2 rounded-xl transition-all cursor-pointer ${isActive
                             ? 'bg-[#69DB7C] text-black shadow-md'
                             : 'hover:bg-white/10 text-white/80'
                             }`}
                           title={t.label}
                         >
-                          <Icon size={18} />
+                          <Icon size={17} />
                         </button>
                       );
                     })}
 
-                    <div className="w-full h-px bg-white/15 my-1" />
+                    <div className="w-full h-px bg-white/15 my-0.5" />
 
-                    {/* Color Palette */}
-                    <div className="flex flex-col gap-1.5 items-center">
-                      {CHALK_PALETTE.map((hex) => (
-                        <button
-                          key={hex}
-                          onClick={() => setCurrentColor(hex)}
-                          className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${currentColor === hex ? 'scale-125 ring-2 ring-white' : 'opacity-80'
-                            }`}
-                          style={{ backgroundColor: hex }}
-                        />
-                      ))}
+                    {/* Minimized Color Selector with Popover */}
+                    <div className="relative flex items-center justify-center my-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsColorPickerOpen((prev) => !prev)}
+                        title="Chalk color"
+                        className="w-6 h-6 rounded-full ring-2 ring-white/80 hover:scale-110 transition-transform cursor-pointer shadow-md"
+                        style={{ backgroundColor: currentColor }}
+                      />
+                      {isColorPickerOpen && (
+                        <div className="absolute left-full ml-2.5 p-2 rounded-2xl bg-black/85 backdrop-blur-md border border-white/15 shadow-2xl flex items-center gap-2 z-30">
+                          {CHALK_PALETTE.map((hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              onClick={() => {
+                                setCurrentColor(hex);
+                                setIsColorPickerOpen(false);
+                              }}
+                              className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${currentColor === hex
+                                ? 'scale-125 ring-2 ring-white'
+                                : 'opacity-80 hover:opacity-100'
+                                }`}
+                              style={{ backgroundColor: hex }}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="w-full h-px bg-white/15 my-1" />
+                    <div className="w-full h-px bg-white/15 my-0.5" />
 
                     {/* Undo / Redo / Clear */}
                     <button
                       onClick={undoStroke}
                       disabled={!canUndo}
                       title="Undo stroke"
-                      className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
+                      className="p-1.5 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
                     >
                       <ArrowCounterClockwise size={16} />
                     </button>
@@ -711,27 +981,27 @@ export const StudioPage: React.FC = () => {
                       onClick={redoStroke}
                       disabled={!canRedo}
                       title="Redo stroke"
-                      className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
+                      className="p-1.5 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
                     >
                       <ArrowClockwise size={16} />
                     </button>
                     <button
                       onClick={clearCanvas}
                       title="Clear blackboard"
-                      className="p-2 rounded-xl hover:bg-red-500/30 text-red-400 cursor-pointer"
+                      className="p-1.5 rounded-xl hover:bg-red-500/30 text-red-400 cursor-pointer"
                     >
                       <Trash size={16} />
                     </button>
                   </div>
                 ) : (
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white/80 text-xs font-mono shadow-xl">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white/80 text-xs shadow-xl">
                     <Lock size={15} className="text-amber-400 shrink-0" />
                     <span>View Only • Lecturer controls board</span>
                   </div>
                 )}
               </div>
             </LiveKitConference>
-          ) : stageLayout === 'whiteboard' ? (
+          ) : stageLayout === 'whiteboard' && !isScreenSharing ? (
             /* Fallback Native Chalkboard View when LiveKit is not active */
             <div className="flex-1 relative bg-[#0B0F0D] w-full h-full">
               <VectorCanvas
@@ -741,13 +1011,17 @@ export const StudioPage: React.FC = () => {
                 currentWidth={currentWidth}
                 activeSlideIndex={activeSlideIndex}
                 interactive={hasChalkboardAccess}
+                roomId={code}
+                userId={currentUser?.id || guestId}
+                userName={currentUser?.name || guestName || 'Participant'}
                 laser={laser}
+                onStreamStroke={streamStroke}
                 onCommitStroke={commitStroke}
                 onEmitLaser={emitLaser}
               />
 
               {/* Multi-Slide Navigation Deck Controller */}
-              <div className="absolute top-4 left-4 z-20 flex items-center gap-2 p-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 text-xs font-mono text-white">
+              <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 text-xs text-white">
                 <button
                   onClick={prevSlide}
                   disabled={activeSlideIndex === 0 || !hasChalkboardAccess}
@@ -783,48 +1057,68 @@ export const StudioPage: React.FC = () => {
 
               {/* Chalkboard Floating Drawing Toolbar (or View-Only indicator) */}
               {hasChalkboardAccess ? (
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1.5 p-2 rounded-2xl bg-black/70 backdrop-blur-md border border-white/15 text-white shadow-xl">
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1 p-1.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white shadow-xl max-h-[calc(100%-2rem)]">
                   {tools.map((t) => {
                     const Icon = t.icon;
                     const isActive = currentTool === t.id;
                     return (
                       <button
                         key={t.id}
-                        onClick={() => setCurrentTool(t.id)}
-                        className={`p-2.5 rounded-xl transition-all cursor-pointer ${isActive
+                        onClick={() => {
+                          setCurrentTool(t.id);
+                          setIsColorPickerOpen(false);
+                        }}
+                        className={`p-2 rounded-xl transition-all cursor-pointer ${isActive
                           ? 'bg-[#69DB7C] text-black shadow-md'
                           : 'hover:bg-white/10 text-white/80'
                           }`}
                         title={t.label}
                       >
-                        <Icon size={18} />
+                        <Icon size={17} />
                       </button>
                     );
                   })}
 
-                  <div className="w-full h-px bg-white/15 my-1" />
+                  <div className="w-full h-px bg-white/15 my-0.5" />
 
-                  {/* Color Palette */}
-                  <div className="flex flex-col gap-1.5 items-center">
-                    {CHALK_PALETTE.map((hex) => (
-                      <button
-                        key={hex}
-                        onClick={() => setCurrentColor(hex)}
-                        className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${currentColor === hex ? 'scale-125 ring-2 ring-white' : 'opacity-80'
-                          }`}
-                        style={{ backgroundColor: hex }}
-                      />
-                    ))}
+                  {/* Minimized Color Selector with Popover */}
+                  <div className="relative flex items-center justify-center my-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsColorPickerOpen((prev) => !prev)}
+                      title="Chalk color"
+                      className="w-6 h-6 rounded-full ring-2 ring-white/80 hover:scale-110 transition-transform cursor-pointer shadow-md"
+                      style={{ backgroundColor: currentColor }}
+                    />
+                    {isColorPickerOpen && (
+                      <div className="absolute left-full ml-2.5 p-2 rounded-2xl bg-black/85 backdrop-blur-md border border-white/15 shadow-2xl flex items-center gap-2 z-30">
+                        {CHALK_PALETTE.map((hex) => (
+                          <button
+                            key={hex}
+                            type="button"
+                            onClick={() => {
+                              setCurrentColor(hex);
+                              setIsColorPickerOpen(false);
+                            }}
+                            className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${currentColor === hex
+                              ? 'scale-125 ring-2 ring-white'
+                              : 'opacity-80 hover:opacity-100'
+                              }`}
+                            style={{ backgroundColor: hex }}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="w-full h-px bg-white/15 my-1" />
+                  <div className="w-full h-px bg-white/15 my-0.5" />
 
                   {/* Undo / Redo / Clear */}
                   <button
                     onClick={undoStroke}
                     disabled={!canUndo}
                     title="Undo stroke"
-                    className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
+                    className="p-1.5 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
                   >
                     <ArrowCounterClockwise size={16} />
                   </button>
@@ -832,20 +1126,20 @@ export const StudioPage: React.FC = () => {
                     onClick={redoStroke}
                     disabled={!canRedo}
                     title="Redo stroke"
-                    className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
+                    className="p-1.5 rounded-xl hover:bg-white/10 disabled:opacity-30 cursor-pointer"
                   >
                     <ArrowClockwise size={16} />
                   </button>
                   <button
                     onClick={clearCanvas}
                     title="Clear blackboard"
-                    className="p-2 rounded-xl hover:bg-red-500/30 text-red-400 cursor-pointer"
+                    className="p-1.5 rounded-xl hover:bg-red-500/30 text-red-400 cursor-pointer"
                   >
                     <Trash size={16} />
                   </button>
                 </div>
               ) : (
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white/80 text-xs font-mono shadow-xl">
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white/80 text-xs shadow-xl">
                   <Lock size={15} className="text-amber-400 shrink-0" />
                   <span>View Only • Lecturer controls board</span>
                 </div>
@@ -867,7 +1161,7 @@ export const StudioPage: React.FC = () => {
                     }}
                     className="w-full h-full object-contain"
                   />
-                  <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/10 font-mono text-xs text-[#E3E3E3] flex items-center gap-2">
+                  <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-xs text-[#E3E3E3] flex items-center gap-2">
                     <Desktop size={14} weight="fill" className="text-blue-400" />
                     <span>You are presenting screen</span>
                   </div>
@@ -896,7 +1190,7 @@ export const StudioPage: React.FC = () => {
                         }`}
                     >
                       {/* Avatar */}
-                      <div className="w-20 h-20 rounded-full bg-white/10 text-white flex items-center justify-center font-mono text-2xl font-semibold shadow-inner">
+                      <div className="w-20 h-20 rounded-full bg-white/10 text-white flex items-center justify-center text-2xl font-semibold shadow-inner">
                         {p.avatarTag}
                       </div>
 
@@ -904,7 +1198,7 @@ export const StudioPage: React.FC = () => {
                       <div className="absolute bottom-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-xs font-medium text-white border border-white/10">
                         <span>{p.name}</span>
                         {p.role === 'lecturer' && (
-                          <span className="text-[10px] font-mono text-[#69DB7C] uppercase font-bold">
+                          <span className="text-[10px] text-[#69DB7C] uppercase font-bold">
                             Host
                           </span>
                         )}
@@ -913,57 +1207,69 @@ export const StudioPage: React.FC = () => {
 
                       {/* Hand Raised Queue Badge */}
                       {p.handRaised && (
-                        <div className="absolute top-3 left-3 flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500 text-black text-xs font-bold font-mono shadow-md animate-bounce">
+                        <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500 text-black text-xs font-bold shadow-md animate-bounce z-20">
                           <HandPalm size={14} weight="fill" />
-                          <span>#1 in queue</span>
+                          <span>HAND UP</span>
                         </div>
                       )}
 
                       {/* Lecturer Control Action Pills */}
-                      {isMeLecturer && p.id !== currentUser?.id && (
-                        <div className="absolute top-3 left-3 flex items-center gap-1 z-20">
+                      <div className="absolute top-3 right-3 flex items-center gap-1 z-20">
+                        {isMeLecturer && p.handRaised && (
                           <button
                             type="button"
-                            onClick={() =>
-                              grantParticipantPermission(p.socketId, {
-                                canDraw: !p.canDraw,
-                              })
-                            }
-                            className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${p.canDraw
-                              ? 'bg-[#69DB7C] text-[#0F1713]'
-                              : 'bg-black/50 hover:bg-black/80 text-[#9AA0A6] hover:text-[#E3E3E3]'
-                              }`}
-                            title={p.canDraw ? 'Revoke Chalkboard' : 'Grant Chalkboard'}
+                            onClick={() => lowerHand(p.socketId || p.id)}
+                            className="px-2 py-0.5 rounded-full bg-black/60 hover:bg-black/90 text-[10px] text-[#E3E3E3] border border-[#3C4043] cursor-pointer"
+                            title="Lower hand"
                           >
-                            <ChalkboardTeacher size={13} weight={p.canDraw ? 'fill' : 'regular'} />
+                            Lower Hand
                           </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              grantParticipantPermission(p.socketId, {
-                                canSpeak: !p.canSpeak,
-                              })
-                            }
-                            className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${p.canSpeak
-                              ? 'bg-[#69DB7C] text-[#0F1713]'
-                              : 'bg-black/50 hover:bg-black/80 text-[#9AA0A6] hover:text-[#E3E3E3]'
-                              }`}
-                            title={p.canSpeak ? 'Revoke Mic' : 'Grant Mic'}
-                          >
-                            <Microphone size={13} weight={p.canSpeak ? 'fill' : 'regular'} />
-                          </button>
-                        </div>
-                      )}
+                        )}
+                        {isMeLecturer && p.id !== currentUser?.id && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                grantParticipantPermission(p.socketId, {
+                                  canDraw: !p.canDraw,
+                                })
+                              }
+                              className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${p.canDraw
+                                ? 'bg-[#69DB7C] text-[#0F1713]'
+                                : 'bg-black/50 hover:bg-black/80 text-[#9AA0A6] hover:text-[#E3E3E3]'
+                                }`}
+                              title={p.canDraw ? 'Revoke Chalkboard' : 'Grant Chalkboard'}
+                            >
+                              <ChalkboardTeacher size={13} weight={p.canDraw ? 'fill' : 'regular'} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                grantParticipantPermission(p.socketId, {
+                                  canSpeak: !p.canSpeak,
+                                })
+                              }
+                              className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${p.canSpeak
+                                ? 'bg-[#69DB7C] text-[#0F1713]'
+                                : 'bg-black/50 hover:bg-black/80 text-[#9AA0A6] hover:text-[#E3E3E3]'
+                                }`}
+                              title={p.canSpeak ? 'Revoke Mic' : 'Grant Mic'}
+                            >
+                              <Microphone size={13} weight={p.canSpeak ? 'fill' : 'regular'} />
+                            </button>
+                          </>
+                        )}
 
-                      {/* Pin Button */}
-                      <button
-                        onClick={() =>
-                          setPinnedParticipantId(isPinned ? null : p.id)
-                        }
-                        className="absolute top-3 right-3 p-1.5 rounded-full bg-black/40 hover:bg-black/80 text-white opacity-0 hover:opacity-100 group-hover:opacity-100 transition-opacity"
-                      >
-                        <PushPin size={14} weight={isPinned ? 'fill' : 'regular'} />
-                      </button>
+                        {/* Pin Button */}
+                        <button
+                          onClick={() =>
+                            setPinnedParticipantId(isPinned ? null : p.id)
+                          }
+                          className="p-1.5 rounded-full bg-black/40 hover:bg-black/80 text-white transition-opacity cursor-pointer"
+                        >
+                          <PushPin size={14} weight={isPinned ? 'fill' : 'regular'} />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -973,7 +1279,7 @@ export const StudioPage: React.FC = () => {
 
           {/* Live Closed Captions Banner */}
           {isCaptionsOn && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-2xl w-full px-6 py-2.5 rounded-2xl bg-black/80 text-white text-xs font-mono backdrop-blur-md border border-white/15 z-30 space-y-1">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-2xl w-full px-6 py-2.5 rounded-2xl bg-black/80 text-white text-xs backdrop-blur-md border border-white/15 z-30 space-y-1">
               {activeCaptions.length > 0 ? (
                 activeCaptions.map((cap, i) => (
                   <div key={i} className="truncate">
@@ -1024,7 +1330,7 @@ export const StudioPage: React.FC = () => {
               <div className="flex-1 p-5 space-y-6 overflow-y-auto text-xs">
                 <div className="space-y-2">
                   <div className="font-medium text-sm">Joining info</div>
-                  <p className="opacity-70 font-mono text-[11px] break-all select-all">
+                  <p className="opacity-70 text-[11px] break-all select-all">
                     {window.location.href}
                   </p>
                   <button
@@ -1037,9 +1343,9 @@ export const StudioPage: React.FC = () => {
                 </div>
 
                 <div className="space-y-2 pt-4 border-t border-black/10 dark:border-white/10">
-                  <div className="font-medium text-sm">Dial-in Information</div>
+                  <div className="font-medium text-sm">Session Telemetry</div>
                   <p className="opacity-70">
-                    Dial-in PIN: <strong className="font-mono">842 910#</strong>
+                    Room Code: <strong className="font-mono">{code}</strong>
                   </p>
                   <p className="opacity-60 text-[11px]">
                     24kbps Low-bandwidth voice conference active.
@@ -1104,7 +1410,7 @@ export const StudioPage: React.FC = () => {
                                     canSpeak: !p.canSpeak,
                                   })
                                 }
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-mono cursor-pointer transition-colors ${p.canSpeak
+                                className={`px-2 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors ${p.canSpeak
                                   ? 'bg-[#69DB7C]/20 text-[#69DB7C] border border-[#69DB7C]/40'
                                   : 'bg-black/10 dark:bg-white/10 hover:bg-[#69DB7C]/15 text-white/80'
                                   }`}
@@ -1118,7 +1424,7 @@ export const StudioPage: React.FC = () => {
                                     canDraw: !p.canDraw,
                                   })
                                 }
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-mono cursor-pointer transition-colors ${p.canDraw
+                                className={`px-2 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors ${p.canDraw
                                   ? 'bg-[#69DB7C]/20 text-[#69DB7C] border border-[#69DB7C]/40'
                                   : 'bg-black/10 dark:bg-white/10 hover:bg-[#69DB7C]/15 text-white/80'
                                   }`}
@@ -1148,13 +1454,13 @@ export const StudioPage: React.FC = () => {
                       className="p-2 rounded-2xl flex items-center justify-between hover:bg-black/5 dark:hover:bg-white/5"
                     >
                       <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono font-medium text-[11px]">
+                        <div className="w-7 h-7 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-medium text-[11px]">
                           {p.avatarTag}
                         </div>
                         <div>
                           <div className="font-medium">{p.name}</div>
                           {p.role === 'lecturer' && (
-                            <span className="text-[10px] font-mono text-[#059669] dark:text-[#69DB7C] uppercase font-bold">
+                            <span className="text-[10px] text-[#059669] dark:text-[#69DB7C] uppercase font-bold">
                               Host
                             </span>
                           )}
@@ -1243,7 +1549,7 @@ export const StudioPage: React.FC = () => {
                   {chatMessages.length > 0 ? (
                     chatMessages.map((msg) => (
                       <div key={msg.id} className="space-y-0.5">
-                        <div className="flex items-baseline gap-2 font-mono text-[10px] opacity-60">
+                        <div className="flex items-baseline gap-2 text-[10px] opacity-60">
                           <span className="font-bold">{msg.senderName}</span>
                           <span>
                             {typeof msg.timestamp === 'number'
@@ -1489,7 +1795,7 @@ export const StudioPage: React.FC = () => {
                     <div className="space-y-3 pt-2">
                       {questions.map((q) => (
                         <div key={q.id} className="p-3.5 rounded-2xl border space-y-2">
-                          <div className="flex justify-between font-mono text-[10px] opacity-60">
+                          <div className="flex justify-between text-[10px] opacity-60">
                             <span>{q.authorName}</span>
                             {q.isAnswered && (
                               <span className="text-emerald-500 font-bold">Answered</span>
@@ -1756,20 +2062,22 @@ export const StudioPage: React.FC = () => {
           {isMicMuted && !hasMicAccess && <Lock size={12} className="text-amber-400" />}
         </button>
 
-        {/* Raise Hand Button */}
-        <button
-          type="button"
-          onClick={toggleHandRaised}
-          className={`btn-google px-4 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-2 border cursor-pointer ${isHandRaised
-            ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C]'
-            : 'bg-[#28292A] text-[#E3E3E3] border-[#3C4043] hover:bg-[#3C4043]'
-            }`}
-        >
-          <HandPalm size={18} weight="regular" />
-          <span className="hidden sm:inline">
-            {isHandRaised ? 'Hand Raised' : 'Raise Hand'}
-          </span>
-        </button>
+        {/* Raise Hand Button (Students only) */}
+        {!isMeLecturer && (
+          <button
+            type="button"
+            onClick={toggleHandRaised}
+            className={`btn-google px-4 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-2 border cursor-pointer ${isHandRaised
+              ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C]'
+              : 'bg-[#28292A] text-[#E3E3E3] border-[#3C4043] hover:bg-[#3C4043]'
+              }`}
+          >
+            <HandPalm size={18} weight="regular" />
+            <span className="hidden sm:inline">
+              {isHandRaised ? 'Hand Raised' : 'Raise Hand'}
+            </span>
+          </button>
+        )}
 
         {/* Stage Switcher (Chalkboard only openable by lecturer) */}
         {isMeLecturer ? (
@@ -1818,11 +2126,10 @@ export const StudioPage: React.FC = () => {
                   ? 'Return to Chalkboard'
                   : 'Only the lecturer can open the chalkboard'
             }
-            className={`btn-google px-4 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-2 transition-all ${
-              stageLayout !== 'whiteboard' && lecturerStageLayout !== 'whiteboard'
-                ? 'bg-[#1E2320]/60 border-[#3C4043] text-[#71767B] opacity-60 cursor-not-allowed'
-                : 'bg-[#28292A] border-[#3C4043] text-[#E3E3E3] hover:bg-[#3C4043] cursor-pointer'
-            }`}
+            className={`btn-google px-4 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-2 transition-all ${stageLayout !== 'whiteboard' && lecturerStageLayout !== 'whiteboard'
+              ? 'bg-[#1E2320]/60 border-[#3C4043] text-[#71767B] opacity-60 cursor-not-allowed'
+              : 'bg-[#28292A] border-[#3C4043] text-[#E3E3E3] hover:bg-[#3C4043] cursor-pointer'
+              }`}
           >
             {stageLayout === 'whiteboard' ? (
               <>
@@ -1865,7 +2172,7 @@ export const StudioPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setVideoMode(videoMode === 'standard' ? 'low' : 'standard')}
-              className="px-2 py-1 rounded-full bg-black/60 border border-[#3C4043] hover:border-[#69DB7C] text-[10px] font-mono text-[#E3E3E3] cursor-pointer"
+              className="px-2 py-1 rounded-full bg-black/60 border border-[#3C4043] hover:border-[#69DB7C] text-[10px] text-[#E3E3E3] cursor-pointer"
               title="Toggle between HD 720p and Low 360p"
             >
               {videoMode === 'standard' ? '720p' : '360p'}
@@ -1919,19 +2226,20 @@ export const StudioPage: React.FC = () => {
           <span className="hidden sm:inline">Activities</span>
         </button>
 
-        {/* Leave Call Button */}
+        {/* Leave / End Call Button */}
         <button
           type="button"
           onClick={() => {
-            const courseTarget = activeRoomInfo.courseId
-              ? `/hub/course/${activeRoomInfo.courseId}`
-              : '/hub';
-            navigate(isAuthenticated ? courseTarget : '/');
+            if (isHostLecturer) {
+              handleEndCall();
+            } else {
+              handleLeaveCall();
+            }
           }}
           className="btn-google px-5 py-2.5 rounded-full bg-[#D93025] text-white font-medium text-xs inline-flex items-center gap-2 hover:bg-[#B3261E] cursor-pointer"
         >
           <PhoneDisconnect size={18} weight="fill" />
-          <span>{isAuthenticated ? 'Leave' : 'Exit Trial'}</span>
+          <span>{isHostLecturer ? 'End' : isAuthenticated ? 'Leave' : 'Exit Trial'}</span>
         </button>
       </footer>
 
@@ -1939,22 +2247,37 @@ export const StudioPage: React.FC = () => {
       {showLeaveModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm p-6 rounded-3xl bg-[#141E19] border border-white/20 text-white space-y-4 shadow-2xl">
-            <h3 className="font-medium text-base">Leave Call</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium text-base">End Studio Session</h3>
+              <button
+                type="button"
+                onClick={() => setShowLeaveModal(false)}
+                className="p-1 rounded-full hover:bg-white/10 text-white/60 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
             <p className="text-xs opacity-70">
               Do you want to leave the call, or end the meeting for everyone?
             </p>
             <div className="space-y-2 pt-2">
               <button
-                onClick={handleLeaveCall}
-                className="w-full py-2.5 rounded-full border border-white/20 text-xs font-medium hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  setShowLeaveModal(false);
+                  handleLeaveCall();
+                }}
+                className="w-full py-2.5 rounded-full border border-white/20 text-xs font-medium hover:bg-white/10 cursor-pointer"
               >
                 Just leave call
               </button>
               <button
+                type="button"
                 onClick={() => {
-                  handleLeaveCall();
+                  setShowLeaveModal(false);
+                  handleEndCall();
                 }}
-                className="w-full py-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
+                className="w-full py-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-medium cursor-pointer"
               >
                 End call for everyone
               </button>

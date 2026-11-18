@@ -1,5 +1,11 @@
-# Chalk
-### The Free, Low-Data Virtual Classroom Built for Weak Internet
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/chalk-white.png">
+    <img alt="Chalk" src="assets/chalk-black.png" width="320">
+  </picture>
+</p>
+
+<h3 align="center">The Free, Low-Data Virtual Classroom Built for Weak Internet</h3>
 
 > **In plain English:** Traditional video apps like Zoom and Google Meet send heavy video streams that freeze and eat up your mobile data in minutes. **Chalk replaces heavy video with a smart digital chalkboard and clear voice calls.** It cuts your data usage by **97.6%**, meaning a 1-hour class uses only **~12.6 MB** instead of 540 MB.
 

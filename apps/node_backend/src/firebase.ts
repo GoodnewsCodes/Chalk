@@ -29,6 +29,7 @@ export type CollectionName =
   | 'assignments'
   | 'quizzes'
   | 'notes'
+  | 'flashcards'
   | 'metrics';
 
 const ALL_COLLECTIONS: CollectionName[] = [
@@ -40,6 +41,7 @@ const ALL_COLLECTIONS: CollectionName[] = [
   'assignments',
   'quizzes',
   'notes',
+  'flashcards',
   'metrics',
 ];
 
@@ -55,6 +57,7 @@ const firestoreDatabase: Record<
   assignments: new Map(),
   quizzes: new Map(),
   notes: new Map(),
+  flashcards: new Map(),
   metrics: new Map(),
 };
 
@@ -122,6 +125,27 @@ function setBoundedMapEntry(
 }
 
 let isFirebaseAdminInitialized = false;
+
+export function sanitizeUserId(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.length > 64 || !/^[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+function getUserDocCaseInsensitive(
+  uid: string
+): Record<string, unknown> | undefined {
+  return (
+    firestoreDatabase.users.get(uid) ||
+    firestoreDatabase.users.get(uid.toLowerCase()) ||
+    Array.from(firestoreDatabase.users.entries()).find(
+      ([k]) => k.toLowerCase() === uid.toLowerCase()
+    )?.[1]
+  );
+}
 
 export function initFirebaseAdmin(): boolean {
   if (isFirebaseAdminInitialized) return true;
@@ -203,14 +227,14 @@ export async function verifyFirebaseIdToken(
         64
       );
       let department = 'Computer Science & Engineering';
-      let matricOrStaffId = role === 'lecturer' ? 'STAFF/CS/2018' : 'CSC/2022/1042';
+      let matricOrStaffId = '';
       let avatarTag =
         displayName
           .split(' ')
           .map((p) => p[0])
           .join('')
           .slice(0, 2)
-          .toUpperCase() || 'AO';
+          .toUpperCase() || 'CU';
       let isProfileComplete = false;
 
       try {
@@ -286,7 +310,7 @@ export async function verifyFirebaseIdToken(
         firebase?: { sign_in_provider?: string };
       };
 
-      const uid = sanitizeRoomOrEntityId(jwtPayload.user_id || jwtPayload.sub || '');
+      const uid = sanitizeUserId(jwtPayload.user_id || jwtPayload.sub || '');
       const nowSec = Math.floor(Date.now() / 1000);
       const isGoogleIssuer =
         typeof jwtPayload.iss === 'string' &&
@@ -299,13 +323,22 @@ export async function verifyFirebaseIdToken(
         (!jwtPayload.exp || jwtPayload.exp > nowSec - 60) &&
         (!provider || provider === 'google.com')
       ) {
-        const cachedUser = firestoreDatabase.users.get(uid);
+        const cachedUser = getUserDocCaseInsensitive(uid);
         const role: 'student' | 'lecturer' =
           cachedUser?.role === 'lecturer' ? 'lecturer' : 'student';
+        const rawCachedName = typeof cachedUser?.name === 'string' ? cachedUser.name : '';
+        const isLeakedDemo =
+          rawCachedName === 'Alex Okafor' || rawCachedName === 'Prof. Adeleke O.';
         const displayName = sanitizeDisplayText(
-          cachedUser?.name || jwtPayload.name || jwtPayload.email || 'Campus User',
+          (!isLeakedDemo && rawCachedName) || jwtPayload.name || jwtPayload.email || 'Campus User',
           64
         );
+        const rawCachedMatric =
+          typeof cachedUser?.matricOrStaffId === 'string' ? cachedUser.matricOrStaffId : '';
+        const cleanMatric =
+          rawCachedMatric === 'CSC/2022/1042' || rawCachedMatric === 'STAFF/CS/2018'
+            ? ''
+            : rawCachedMatric;
 
         return {
           uid,
@@ -319,22 +352,19 @@ export async function verifyFirebaseIdToken(
             typeof cachedUser?.department === 'string'
               ? cachedUser.department
               : 'Computer Science & Engineering',
-          matricOrStaffId:
-            typeof cachedUser?.matricOrStaffId === 'string'
-              ? cachedUser.matricOrStaffId
-              : role === 'lecturer'
-              ? 'STAFF/CS/2018'
-              : 'CSC/2022/1042',
+          matricOrStaffId: cleanMatric,
           avatarTag:
-            typeof cachedUser?.avatarTag === 'string'
+            !isLeakedDemo && typeof cachedUser?.avatarTag === 'string' && cachedUser.avatarTag !== 'AO' && cachedUser.avatarTag !== 'PA'
               ? cachedUser.avatarTag
               : displayName
                   .split(' ')
                   .map((p) => p[0])
                   .join('')
                   .slice(0, 2)
-                  .toUpperCase() || 'AO',
-          isProfileComplete: Boolean(cachedUser?.isProfileComplete ?? false),
+                  .toUpperCase() || 'CU',
+          isProfileComplete: Boolean(
+            cachedUser?.isProfileComplete || Boolean(cleanMatric)
+          ),
           provider: 'google.com',
           isGuest: false,
         };
@@ -347,9 +377,14 @@ export async function verifyFirebaseIdToken(
   if (!isProd && /^mock_firebase_token_[a-zA-Z0-9_-]{3,48}$/.test(trimmed)) {
     const suffix = trimmed.replace('mock_firebase_token_', '');
     const uid = suffix.startsWith('usr_') ? suffix : `usr_${suffix}`;
-    const cachedUser = firestoreDatabase.users.get(uid);
+    const isDemoUid =
+      uid === 'usr_alex_okafor_unilag_edu_ng' ||
+      uid === 'usr_adeleke_prof_unilag_edu_ng';
+    const cachedUser = getUserDocCaseInsensitive(uid);
     const role: 'student' | 'lecturer' =
-      cachedUser?.role === 'lecturer' ? 'lecturer' : 'student';
+      uid === 'usr_adeleke_prof_unilag_edu_ng' || cachedUser?.role === 'lecturer'
+        ? 'lecturer'
+        : 'student';
 
     return {
       uid,
@@ -360,6 +395,10 @@ export async function verifyFirebaseIdToken(
       name:
         typeof cachedUser?.name === 'string'
           ? sanitizeDisplayText(cachedUser.name, 64)
+          : uid === 'usr_adeleke_prof_unilag_edu_ng'
+          ? 'Prof. Adeleke O.'
+          : uid === 'usr_alex_okafor_unilag_edu_ng'
+          ? 'Alex Okafor'
           : 'Verified Campus User',
       role,
       department:
@@ -369,11 +408,19 @@ export async function verifyFirebaseIdToken(
       matricOrStaffId:
         typeof cachedUser?.matricOrStaffId === 'string'
           ? cachedUser.matricOrStaffId
-          : role === 'lecturer'
-          ? 'STAFF/CS/2018'
-          : 'CSC/2022/1042',
+          : isDemoUid
+          ? role === 'lecturer'
+            ? 'STAFF/CS/2018'
+            : 'CSC/2022/1042'
+          : '',
       avatarTag:
-        typeof cachedUser?.avatarTag === 'string' ? cachedUser.avatarTag : 'AO',
+        typeof cachedUser?.avatarTag === 'string'
+          ? cachedUser.avatarTag
+          : isDemoUid
+          ? role === 'lecturer'
+            ? 'PA'
+            : 'AO'
+          : 'CU',
       isProfileComplete: Boolean(cachedUser?.isProfileComplete ?? true),
       provider: 'google.com',
       isGuest: false,
@@ -423,10 +470,10 @@ export async function saveUserToFirestore(
   uid: string,
   userData: Record<string, unknown>
 ): Promise<Record<string, unknown> | null> {
-  const safeUid = sanitizeRoomOrEntityId(uid);
+  const safeUid = sanitizeUserId(uid);
   if (!safeUid) return null;
 
-  const existing = firestoreDatabase.users.get(safeUid) || {};
+  const existing = getUserDocCaseInsensitive(safeUid) || {};
 
   const sanitizedPayload: Record<string, unknown> = {
     id: safeUid,
@@ -450,21 +497,35 @@ export async function saveUserToFirestore(
       80
     ),
     matricOrStaffId: sanitizeDisplayText(
-      userData.matricOrStaffId ?? existing.matricOrStaffId ?? 'CSC/2022/1042',
+      (typeof userData.matricOrStaffId === 'string' && userData.matricOrStaffId.trim())
+        ? userData.matricOrStaffId
+        : (typeof existing.matricOrStaffId === 'string' && existing.matricOrStaffId.trim())
+        ? existing.matricOrStaffId
+        : '',
       40
     ),
     avatarTag: sanitizeDisplayText(
-      userData.avatarTag ?? existing.avatarTag ?? 'AO',
+      (typeof userData.avatarTag === 'string' && userData.avatarTag.trim())
+        ? userData.avatarTag
+        : (typeof existing.avatarTag === 'string' && existing.avatarTag.trim())
+        ? existing.avatarTag
+        : 'CU',
       4
     ),
     isProfileComplete: Boolean(
-      userData.isProfileComplete ?? existing.isProfileComplete ?? false
+      userData.isProfileComplete === true ||
+      existing.isProfileComplete === true ||
+      Boolean(userData.matricOrStaffId && String(userData.matricOrStaffId).trim()) ||
+      Boolean(existing.matricOrStaffId && String(existing.matricOrStaffId).trim())
     ),
     provider: 'google.com',
     updatedAt: new Date().toISOString(),
   };
 
   setBoundedMapEntry(firestoreDatabase.users, safeUid, sanitizedPayload);
+  if (safeUid.toLowerCase() !== safeUid) {
+    setBoundedMapEntry(firestoreDatabase.users, safeUid.toLowerCase(), sanitizedPayload);
+  }
 
   if (initFirebaseAdmin()) {
     try {
@@ -540,7 +601,33 @@ export function getFirestoreDocument(
   collection: CollectionName,
   id: string
 ): Record<string, unknown> | undefined {
+  if (collection === 'users') {
+    const safeUid = sanitizeUserId(id);
+    if (!safeUid) return undefined;
+    return getUserDocCaseInsensitive(safeUid);
+  }
   const safeId = sanitizeRoomOrEntityId(id);
   if (!safeId) return undefined;
   return firestoreDatabase[collection].get(safeId);
+}
+
+export async function deleteFirestoreDocument(
+  col: CollectionName,
+  id: string
+): Promise<boolean> {
+  const safeId = sanitizeRoomOrEntityId(id);
+  if (!safeId) return false;
+
+  firestoreDatabase[col].delete(safeId);
+  schedulePersistSnapshot();
+
+  if (initFirebaseAdmin()) {
+    try {
+      await admin.firestore().collection(col).doc(safeId).delete();
+    } catch (err) {
+      console.error(`[Chalk Firestore] Failed to delete ${col}/${safeId}:`, err);
+    }
+  }
+
+  return true;
 }

@@ -15,6 +15,8 @@ import {
   SignOut,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
+import { ChalkLogo } from '../components/ChalkLogo';
+import { isDemoAccount } from '../data/mockCatalog';
 
 const DEPARTMENTS = [
   'Computer Science & Engineering',
@@ -26,14 +28,20 @@ const DEPARTMENTS = [
   'Physics & Applied Sciences',
 ];
 
-const AVATAR_TAGS = ['AO', 'PA', 'CN', 'TB', 'IK', 'FB', 'EN', 'CS'];
+const getInitials = (fullName: string): string => {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return fullName.trim().slice(0, 2).toUpperCase() || 'CU';
+};
 
 const getDestinationLabel = (path: string | null): string | null => {
   if (!path) return null;
   if (path.startsWith('/hub/course')) return 'Course Workspace';
   if (path.startsWith('/hub')) return 'Classroom Hub Dashboard';
   if (path.startsWith('/study')) return 'Study Hub & AI Notes';
-  if (path.startsWith('/replays')) return 'Recorded Replays Dashboard';
+  if (path.startsWith('/catch-up') || path.startsWith('/replays')) return 'AI Catch Up Library';
   if (path.startsWith('/benchmarks')) return 'Data Savings Dashboard';
   if (path.startsWith('/studio')) return 'Live Classroom Session';
   return 'Classroom Dashboard';
@@ -57,38 +65,47 @@ export const AuthPage: React.FC = () => {
   const redirectPath = rawRedirect || '/hub';
   const destinationLabel = getDestinationLabel(rawRedirect);
 
+  const isExistingComplete = Boolean(
+    currentUser &&
+      (currentUser.isProfileComplete ||
+        (currentUser.matricOrStaffId && currentUser.matricOrStaffId.trim()))
+  );
+
   const initialMode =
-    searchParams.get('mode') === 'signup' ||
-      (currentUser && !currentUser.isProfileComplete)
+    searchParams.get('mode') === 'signup' && !isExistingComplete
       ? 'signup'
       : 'login';
 
   const [authMode, setAuthMode] = useState<'login' | 'signup'>(initialMode);
   const [step, setStep] = useState<1 | 2>(
-    currentUser && !currentUser.isProfileComplete ? 2 : 1
+    currentUser && !isExistingComplete ? 2 : 1
   );
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
   // Step 2 Campus Profile State (persisted to Cloud Firestore `users/{uid}`)
-  const [email, setEmail] = useState(
-    currentUser?.email || 'alex.okafor@unilag.edu.ng'
-  );
-  const [name, setName] = useState(currentUser?.name || 'Alex Okafor');
+  const [email, setEmail] = useState(currentUser?.email || '');
+  const [name, setName] = useState(currentUser?.name || '');
   const [role, setRole] = useState<'student' | 'lecturer'>(
     currentUser?.role || 'student'
   );
   const [matricOrStaffId, setMatricOrStaffId] = useState(
-    currentUser?.matricOrStaffId || 'CSC/2022/1042'
+    currentUser?.matricOrStaffId || ''
   );
   const [department, setDepartment] = useState(
     currentUser?.department || DEPARTMENTS[0]
   );
-  const [avatarTag, setAvatarTag] = useState(currentUser?.avatarTag || 'AO');
   const [customEmailInput, setCustomEmailInput] = useState('');
   const [customNameInput, setCustomNameInput] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Automatically navigate away if user is already authenticated with a completed campus profile
+  useEffect(() => {
+    if (isAuthenticated && isExistingComplete) {
+      navigate(redirectPath, { replace: true });
+    }
+  }, [isAuthenticated, isExistingComplete, navigate, redirectPath]);
 
   // Sync mode when query parameter changes
   useEffect(() => {
@@ -97,11 +114,11 @@ export const AuthPage: React.FC = () => {
       setAuthMode('signup');
     } else if (modeParam === 'login') {
       setAuthMode('login');
-      if (isAuthenticated) {
+      if (isAuthenticated || isExistingComplete) {
         setStep(1);
       }
     }
-  }, [searchParams, isAuthenticated]);
+  }, [searchParams, isAuthenticated, isExistingComplete]);
 
   // Sync Step 2 fields when currentUser changes from Firebase Auth
   useEffect(() => {
@@ -111,14 +128,15 @@ export const AuthPage: React.FC = () => {
       setRole(currentUser.role);
       setMatricOrStaffId(currentUser.matricOrStaffId);
       setDepartment(currentUser.department || DEPARTMENTS[0]);
-      setAvatarTag(currentUser.avatarTag || 'AO');
     }
   }, [currentUser]);
 
   const switchAuthMode = (nextMode: 'login' | 'signup') => {
     setFormError(null);
     setAuthMode(nextMode);
-    setStep(1);
+    if (!currentUser || isExistingComplete) {
+      setStep(1);
+    }
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('mode', nextMode);
     setSearchParams(nextParams, { replace: true });
@@ -133,18 +151,22 @@ export const AuthPage: React.FC = () => {
     if (firebaseReady) {
       setIsAuthenticating(true);
       try {
-        const { user, isNewUser } = await authenticateWithGoogle();
+        const { user } = await authenticateWithGoogle();
         setName(user.name);
         setEmail(user.email);
         setRole(user.role);
         setMatricOrStaffId(user.matricOrStaffId);
         setDepartment(user.department || DEPARTMENTS[0]);
-        setAvatarTag(user.avatarTag || 'AO');
 
-        if (isNewUser || authMode === 'signup' || !user.isProfileComplete) {
-          setStep(2);
-        } else {
+        const hasCompleteProfile = Boolean(
+          user.isProfileComplete ||
+            (user.matricOrStaffId && user.matricOrStaffId.trim())
+        );
+
+        if (hasCompleteProfile) {
           navigate(redirectPath, { replace: true });
+        } else {
+          setStep(2);
         }
       } catch (err: unknown) {
         const message =
@@ -171,7 +193,10 @@ export const AuthPage: React.FC = () => {
     setShowAccountModal(false);
     setFormError(null);
 
-    if (authMode === 'login') {
+    const isDemo = isDemoAccount({ email: acct.email });
+    const hasCompleteProfile = Boolean(acct.idCode && acct.idCode.trim());
+
+    if (isDemo || hasCompleteProfile) {
       signInWithGoogle({
         name: acct.name,
         email: acct.email,
@@ -194,7 +219,6 @@ export const AuthPage: React.FC = () => {
       setEmail(acct.email);
       setRole(acct.role);
       setMatricOrStaffId(acct.idCode);
-      setAvatarTag(acct.tag);
       setStep(2);
     }
   };
@@ -213,7 +237,7 @@ export const AuthPage: React.FC = () => {
         name: name.trim(),
         matricOrStaffId: matricOrStaffId.trim(),
         department,
-        avatarTag,
+        avatarTag: getInitials(name),
       });
       navigate(redirectPath, { replace: true });
     } catch (err: unknown) {
@@ -258,7 +282,9 @@ export const AuthPage: React.FC = () => {
             <span>{step === 2 ? 'Back to Step 1' : 'Back to Landing'}</span>
           </button>
 
-
+          <Link to="/" className="inline-flex items-center py-1">
+            <ChalkLogo className="h-6 w-auto" />
+          </Link>
         </div>
 
         {/* Redirect Guard Banner when user tried to open a protected dashboard */}
@@ -300,7 +326,7 @@ export const AuthPage: React.FC = () => {
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className={`w-10 h-10 rounded-full font-mono font-medium text-xs flex items-center justify-center shrink-0 ${isDark
+                  className={`w-10 h-10 rounded-full font-medium text-xs flex items-center justify-center shrink-0 ${isDark
                     ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}
@@ -312,7 +338,7 @@ export const AuthPage: React.FC = () => {
                     Signed in as {currentUser.name}
                   </div>
                   <div
-                    className={`text-xs font-mono truncate ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    className={`text-xs truncate ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                       }`}
                   >
                     {currentUser.role.toUpperCase()} • {currentUser.matricOrStaffId}
@@ -354,7 +380,7 @@ export const AuthPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => switchAuthMode('login')}
-                className={`btn-google py-2 rounded-full text-xs font-medium transition-colors cursor-pointer ${authMode === 'login'
+                className={`btn-google py-2 rounded-full text-sm font-medium transition-colors cursor-pointer ${authMode === 'login'
                   ? isDark
                     ? 'bg-[#69DB7C] text-[#0F1713]'
                     : 'bg-[#059669] text-white'
@@ -363,12 +389,12 @@ export const AuthPage: React.FC = () => {
                     : 'text-[#5F6368] hover:text-[#202124]'
                   }`}
               >
-                Log In with Google
+                Log In
               </button>
               <button
                 type="button"
                 onClick={() => switchAuthMode('signup')}
-                className={`btn-google py-2 rounded-full text-xs font-medium transition-colors cursor-pointer ${authMode === 'signup'
+                className={`btn-google py-2 rounded-full text-sm font-medium transition-colors cursor-pointer ${authMode === 'signup'
                   ? isDark
                     ? 'bg-[#69DB7C] text-[#0F1713]'
                     : 'bg-[#059669] text-white'
@@ -377,7 +403,7 @@ export const AuthPage: React.FC = () => {
                     : 'text-[#5F6368] hover:text-[#202124]'
                   }`}
               >
-                Sign Up with Google
+                Sign Up
               </button>
             </div>
 
@@ -392,7 +418,7 @@ export const AuthPage: React.FC = () => {
                   }`}
               >
                 {authMode === 'login'
-                  ? 'Authenticate with your university or personal Google account to sync your courses, notes, and offline DVR lectures.'
+                  ? 'Authenticate to sync your courses, notes, and offline lectures.'
                   : 'Sign up in one click, then complete your campus profile.'}
               </p>
             </div>
@@ -408,9 +434,9 @@ export const AuthPage: React.FC = () => {
               type="button"
               disabled={isAuthenticating}
               onClick={handleGoogleAuthClick}
-              className={`btn-google w-full py-4 px-5 rounded-full font-medium text-sm flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60 ${isDark
-                ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                : 'bg-[#059669] text-white hover:bg-[#047857]'
+              className={`btn-google w-full border py-4 px-5 rounded-full font-medium text-sm flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60 ${isDark
+                ? 'bg-[#0F1713] border-[#69DB7C] text-white'
+                : 'bg-[#F8F9FA] border-[#059669] text-[#0F1713]'
                 }`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 48 48">
@@ -437,7 +463,7 @@ export const AuthPage: React.FC = () => {
                 className={`text-xs font-medium text-center ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                   }`}
               >
-                Or use a pre-verified Google Workspace campus account
+                Or use a Demo account
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -466,10 +492,10 @@ export const AuthPage: React.FC = () => {
                     <div>
                       <div className="text-sm font-medium">Alex Okafor</div>
                       <div
-                        className={`text-[11px] font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                        className={`text-[11px] ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                           }`}
                       >
-                        Student • Google Auth
+                        Student
                       </div>
                     </div>
                   </div>
@@ -500,10 +526,10 @@ export const AuthPage: React.FC = () => {
                     <div>
                       <div className="text-sm font-medium">Prof. Adeleke O.</div>
                       <div
-                        className={`text-[11px] font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                        className={`text-[11px] ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                           }`}
                       >
-                        Lecturer • Google Auth
+                        Lecturer
                       </div>
                     </div>
                   </div>
@@ -525,7 +551,7 @@ export const AuthPage: React.FC = () => {
                   }`}
               >
                 <VideoCamera size={14} weight="regular" />
-                <span>Try a live sample class</span>
+                <span>Try a Demo class</span>
               </Link>
             </div>
           </div>
@@ -563,7 +589,6 @@ export const AuthPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setRole('student');
-                    setMatricOrStaffId('CSC/2022/1042');
                   }}
                   className={`btn-google p-3.5 rounded-2xl border text-left cursor-pointer ${role === 'student'
                     ? isDark
@@ -587,7 +612,6 @@ export const AuthPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setRole('lecturer');
-                    setMatricOrStaffId('STAFF/CS/2018');
                   }}
                   className={`btn-google p-3.5 rounded-2xl border text-left cursor-pointer ${role === 'lecturer'
                     ? isDark
@@ -621,6 +645,7 @@ export const AuthPage: React.FC = () => {
               <input
                 id="profile-name"
                 type="text"
+                placeholder="Enter your full name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-normal focus:outline-none ${isDark
@@ -649,9 +674,14 @@ export const AuthPage: React.FC = () => {
                 <input
                   id="profile-id"
                   type="text"
+                  placeholder={
+                    role === 'lecturer'
+                      ? 'Enter your Staff ID'
+                      : 'Enter your Matriculation Number'
+                  }
                   value={matricOrStaffId}
                   onChange={(e) => setMatricOrStaffId(e.target.value)}
-                  className={`w-full pl-10 pr-3.5 py-2.5 rounded-xl border font-mono text-sm font-medium focus:outline-none ${isDark
+                  className={`w-full pl-10 pr-3.5 py-2.5 rounded-xl border text-sm font-medium focus:outline-none ${isDark
                     ? 'bg-[#0F1713] border-[#3C4043] text-[#E3E3E3] focus:border-[#69DB7C]'
                     : 'bg-[#F8F9FA] border-[#DADCE0] text-[#202124] focus:border-[#059669]'
                     }`}
@@ -688,35 +718,6 @@ export const AuthPage: React.FC = () => {
                     </option>
                   ))}
                 </select>
-              </div>
-            </div>
-
-            {/* 5. Badge Monogram */}
-            <div className="space-y-1.5">
-              <span
-                className={`block text-xs font-medium ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
-                  }`}
-              >
-                5. Chalkboard Call-Sign Badge
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {AVATAR_TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => setAvatarTag(tag)}
-                    className={`btn-google w-10 h-10 rounded-full font-mono text-xs font-medium border cursor-pointer ${avatarTag === tag
-                      ? isDark
-                        ? 'bg-[#69DB7C] text-[#0F1713] border-[#69DB7C]'
-                        : 'bg-[#059669] text-white border-[#059669]'
-                      : isDark
-                        ? 'border-[#3C4043] text-[#9AA0A6] hover:text-[#E3E3E3]'
-                        : 'border-[#DADCE0] text-[#5F6368] hover:text-[#202124]'
-                      }`}
-                  >
-                    {tag}
-                  </button>
-                ))}
               </div>
             </div>
 
@@ -759,12 +760,13 @@ export const AuthPage: React.FC = () => {
                 <h2 className="font-display font-medium text-base">
                   Choose a Google account
                 </h2>
-                <p
-                  className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                <div
+                  className={`text-xs flex items-center gap-1.5 ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                     }`}
                 >
-                  to continue to Chalk Classroom
-                </p>
+                  <span>to continue to</span>
+                  <ChalkLogo className="h-3.5 w-auto inline-block" />
+                </div>
               </div>
             </div>
 
@@ -789,14 +791,14 @@ export const AuthPage: React.FC = () => {
                 <div className="text-left">
                   <div className="font-medium text-sm">Alex Okafor</div>
                   <div
-                    className={`text-xs font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                       }`}
                   >
                     alex.okafor@unilag.edu.ng
                   </div>
                 </div>
                 <span
-                  className={`px-2.5 py-0.5 rounded-full font-mono text-[10px] font-medium ${isDark
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-medium ${isDark
                     ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}
@@ -822,14 +824,14 @@ export const AuthPage: React.FC = () => {
                 <div className="text-left">
                   <div className="font-medium text-sm">Prof. Adeleke O.</div>
                   <div
-                    className={`text-xs font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                       }`}
                   >
                     adeleke.prof@unilag.edu.ng
                   </div>
                 </div>
                 <span
-                  className={`px-2.5 py-0.5 rounded-full font-mono text-[10px] font-medium ${isDark
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-medium ${isDark
                     ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}
@@ -882,8 +884,8 @@ export const AuthPage: React.FC = () => {
                       name: derivedName,
                       email: customEmailInput.trim(),
                       role: 'student',
-                      idCode: 'CSC/2026/0198',
-                      tag: derivedName.slice(0, 2).toUpperCase(),
+                      idCode: '',
+                      tag: derivedName.slice(0, 2).toUpperCase() || 'CU',
                     });
                   }}
                   className={`btn-google px-4 py-2 rounded-full font-medium text-xs cursor-pointer ${isDark

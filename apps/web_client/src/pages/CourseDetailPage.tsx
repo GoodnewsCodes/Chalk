@@ -30,6 +30,8 @@ import {
   Question,
   FileText,
   ArrowsClockwise,
+  Sparkle,
+  Cards,
 } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
 import { CourseModel, TopicModel, ClassworkAssignment } from '../types/chalk';
@@ -58,6 +60,7 @@ export const CourseDetailPage: React.FC = () => {
     createTopic,
     deleteTopic,
     updateCourseSettings,
+    deleteCoursePermanently,
     muteStudent,
     removeStudentFromCourse,
     inviteStudentToCourse,
@@ -94,7 +97,11 @@ export const CourseDetailPage: React.FC = () => {
 
   const isLecturer =
     currentUser?.role === 'lecturer' ||
-    course?.lecturerId === currentUser?.id ||
+    Boolean(
+      currentUser?.id &&
+      course?.lecturerId &&
+      course.lecturerId.toLowerCase() === currentUser.id.toLowerCase()
+    ) ||
     Boolean(
       currentUser?.name &&
       course?.lecturerName &&
@@ -162,7 +169,7 @@ export const CourseDetailPage: React.FC = () => {
   const courseAssignments = assignments.filter((a) => a.courseId === course.id);
   const courseTopics = topics.filter((t) => t.courseId === course.id);
   const courseSubmissions = submissions.filter((s) => s.courseId === course.id);
-  const studentsList = course.members?.filter((m) => m.role === 'student') || [];
+  const peopleList = course.members?.filter((m) => m.role === 'student') || [];
   const teachersList = course.members?.filter((m) => m.role === 'lecturer') || [];
 
   const handleCopyCode = () => {
@@ -253,7 +260,19 @@ export const CourseDetailPage: React.FC = () => {
     setShowSettingsModal(false);
   };
 
-  // Bulk actions on selected students
+  const handleDeleteCurrentCourse = async () => {
+    if (
+      window.confirm(
+        `Are you sure you want to delete "${course.code}: ${course.title}" permanently? This action cannot be undone.`
+      )
+    ) {
+      setShowSettingsModal(false);
+      await deleteCoursePermanently(course.id);
+      navigate('/hub');
+    }
+  };
+
+  // Bulk actions on selected people
   const handleBulkMute = async () => {
     for (const id of selectedStudentIds) {
       await muteStudent(course.id, id, true);
@@ -315,14 +334,35 @@ export const CourseDetailPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Course Settings Gear Icon */}
-        <button
-          onClick={() => setShowSettingsModal(true)}
-          title="Class Settings"
-          className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
-        >
-          <Gear size={20} />
-        </button>
+        {/* Course Settings & Lecturer Delete Action */}
+        <div className="flex items-center gap-1.5">
+          <Link
+            to={`/study?course=${encodeURIComponent(course.id)}&tab=flashcards&ai=1`}
+            className="btn-google px-3 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer bg-[#059669]/10 text-[#059669] dark:text-[#69DB7C] hover:bg-[#059669]/20 border border-[#059669]/30 mr-1"
+            title="Generate AI Flashcards for this course based on syllabus, notes, and class materials"
+          >
+            <Sparkle size={14} weight="fill" className="text-amber-400" />
+            <span className="hidden sm:inline">AI Flashcards</span>
+          </Link>
+          {isLecturer && (
+            <button
+              type="button"
+              onClick={handleDeleteCurrentCourse}
+              title="Delete Course"
+              className="p-2 rounded-full text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer inline-flex items-center gap-1 text-xs font-medium"
+            >
+              <Trash size={18} />
+              <span className="hidden sm:inline">Delete Course</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            title="Class Settings"
+            className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+          >
+            <Gear size={20} />
+          </button>
+        </div>
       </nav>
 
       {/* Main Tab Content */}
@@ -340,18 +380,18 @@ export const CourseDetailPage: React.FC = () => {
               }}
             >
               <div className="space-y-1 relative z-10">
-                <span className="font-mono text-xs uppercase tracking-wider bg-black/20 px-2.5 py-1 rounded-full">
+                <span className="font-mono text-xs uppercase tracking-wider px-0.5 py-1 rounded-full">
                   {course.code}
                 </span>
                 <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight">
                   {course.title}
                 </h1>
                 {course.section && (
-                  <p className="text-xs opacity-90 font-mono">{course.section}</p>
+                  <p className="text-xs opacity-90">{course.section}</p>
                 )}
               </div>
 
-              <div className="flex items-center justify-between text-xs font-mono opacity-90 pt-4 relative z-10">
+              <div className="flex items-center justify-between text-xs opacity-90 pt-4 relative z-10">
                 <span>Instructor: {course.lecturerName}</span>
                 {course.room && <span>Room: {course.room}</span>}
               </div>
@@ -368,13 +408,7 @@ export const CourseDetailPage: React.FC = () => {
                 >
                   <div className="flex items-center justify-between text-xs font-medium">
                     <span className="text-black/60 dark:text-white/60">Class Code</span>
-                    <button
-                      onClick={() => setShowExpandCodeModal(true)}
-                      title="Display class code on projector"
-                      className="p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10"
-                    >
-                      <Eye size={16} />
-                    </button>
+
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-mono font-bold text-lg text-[#059669] dark:text-[#69DB7C]">
@@ -382,7 +416,7 @@ export const CourseDetailPage: React.FC = () => {
                     </span>
                     <button
                       onClick={handleCopyCode}
-                      className="p-1.5 rounded-lg border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10 text-xs font-mono flex items-center gap-1 cursor-pointer"
+                      className="p-1.5 rounded-lg border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10 text-xs flex items-center gap-1 cursor-pointer"
                     >
                       {copiedCode ? <Check size={14} /> : <Copy size={14} />}
                       <span>{copiedCode ? 'Copied' : 'Copy'}</span>
@@ -401,18 +435,31 @@ export const CourseDetailPage: React.FC = () => {
                       <span>Studio</span>
                     </div>
                     {isCourseLive && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-red-500/10 text-red-500 font-semibold animate-pulse">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-red-500/10 text-red-500 font-semibold animate-pulse">
                         LIVE
                       </span>
                     )}
                   </div>
-                  <Link
-                    to={`/studio/lobby/${course.liveRoomCode}`}
-                    className="w-full py-2.5 px-4 rounded-full bg-[#059669] hover:bg-[#047857] text-white text-xs font-medium flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-                  >
-                    <VideoCamera size={15} />
-                    <span>Join Class Studio</span>
-                  </Link>
+                  {isLecturer || isCourseLive ? (
+                    <Link
+                      to={`/studio/lobby/${course.liveRoomCode}`}
+                      onClick={() => setActiveRoomCode(course.liveRoomCode)}
+                      className="w-full py-2.5 px-4 rounded-full bg-[#059669] hover:bg-[#047857] text-white text-xs font-medium flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <VideoCamera size={15} />
+                      <span>{isLecturer ? 'Start Class Studio' : 'Join Class Studio'}</span>
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      title="No live class in session"
+                      className="w-full py-2.5 px-4 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 text-xs font-medium flex items-center justify-center gap-2 cursor-not-allowed opacity-60 shadow-none"
+                    >
+                      <VideoCamera size={15} />
+                      <span>Join Class Studio</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Upcoming Due Dates Card */}
@@ -440,7 +487,7 @@ export const CourseDetailPage: React.FC = () => {
                             to={`/hub/course/${course.id}/assignment/${a.id}`}
                             className="block hover:underline truncate"
                           >
-                            <span className="text-black/50 dark:text-white/50 font-mono">
+                            <span className="text-black/50 dark:text-white/50">
                               {a.dueDate}:{' '}
                             </span>
                             <span>{a.title}</span>
@@ -463,7 +510,7 @@ export const CourseDetailPage: React.FC = () => {
                 >
                   <div className="flex items-center gap-3">
                     <div
-                      className={`w-9 h-9 rounded-full flex items-center justify-center font-mono font-medium text-xs shrink-0 ${isDark ? 'bg-[#69DB7C]/20 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
+                      className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${isDark ? 'bg-[#69DB7C]/20 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
                         }`}
                     >
                       {currentUser?.avatarTag || 'CU'}
@@ -529,12 +576,12 @@ export const CourseDetailPage: React.FC = () => {
                         {/* Header */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono font-medium text-xs">
+                            <div className="w-9 h-9 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-medium text-xs">
                               {ann.authorName.slice(0, 2).toUpperCase()}
                             </div>
                             <div>
                               <div className="text-sm font-medium">{ann.authorName}</div>
-                              <div className="text-[11px] font-mono opacity-60">
+                              <div className="text-[11px] opacity-60">
                                 {ann.timestamp}
                               </div>
                             </div>
@@ -581,12 +628,12 @@ export const CourseDetailPage: React.FC = () => {
 
                           {comments.map((com) => (
                             <div key={com.id} className="flex items-start gap-2.5 text-xs">
-                              <div className="w-6 h-6 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono font-medium text-[10px] shrink-0">
+                              <div className="w-6 h-6 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-medium text-[10px] shrink-0">
                                 {com.avatarTag}
                               </div>
                               <div className="flex-1">
                                 <span className="font-medium mr-2">{com.authorName}</span>
-                                <span className="opacity-50 text-[10px] mr-2 font-mono">
+                                <span className="opacity-50 text-[10px] mr-2">
                                   {com.timestamp}
                                 </span>
                                 <div>{com.content}</div>
@@ -748,6 +795,15 @@ export const CourseDetailPage: React.FC = () => {
                   </button>
                 ))}
               </div>
+
+              {/* Study Hub AI Flashcards Shortcut */}
+              <Link
+                to={`/study?course=${encodeURIComponent(course.id)}&tab=flashcards&ai=1`}
+                className="btn-google px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-[#059669] via-[#047857] to-[#0f766e] text-white hover:brightness-110 shadow-xs shrink-0"
+              >
+                <Sparkle size={14} weight="fill" className="text-amber-300" />
+                <span>Practice with AI Flashcards</span>
+              </Link>
             </div>
 
             {/* Classwork Items Grouped by Topic */}
@@ -808,7 +864,7 @@ export const CourseDetailPage: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* TAB 3: PEOPLE                                            */}
+        {/* TAB 3: People                                            */}
         {/* ======================================================== */}
         {activeTab === 'people' && (
           <div className="space-y-8">
@@ -830,17 +886,17 @@ export const CourseDetailPage: React.FC = () => {
               <div className="divide-y divide-black/5 dark:divide-white/5 text-sm">
                 <div className="py-3 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#059669]/15 text-[#059669] dark:text-[#69DB7C] flex items-center justify-center font-mono font-medium text-xs">
+                    <div className="w-8 h-8 rounded-full bg-[#059669]/15 text-[#059669] dark:text-[#69DB7C] flex items-center justify-center font-medium text-xs">
                       {course.lecturerName.slice(0, 2).toUpperCase()}
                     </div>
                     <span className="font-medium">{course.lecturerName}</span>
                   </div>
-                  <span className="text-xs font-mono opacity-60">Course Creator</span>
+                  <span className="text-xs opacity-60">Course Creator</span>
                 </div>
                 {teachersList.map((t) => (
                   <div key={t.id} className="py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono font-medium text-xs">
+                      <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-medium text-xs">
                         {t.avatarTag}
                       </div>
                       <span>{t.name}</span>
@@ -850,15 +906,15 @@ export const CourseDetailPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Students Section */}
+            {/* People Section */}
             <div className="space-y-4">
               <div className="flex items-center justify-between pb-2 border-b border-[#059669]/40">
                 <div className="flex items-center gap-3">
                   <h2 className="text-xl font-medium text-[#059669] dark:text-[#69DB7C]">
-                    Students
+                    People
                   </h2>
-                  <span className="text-xs font-mono opacity-60">
-                    {studentsList.length} students
+                  <span className="text-xs opacity-60">
+                    {peopleList.length} people
                   </span>
                 </div>
                 {isLecturer && (
@@ -882,7 +938,7 @@ export const CourseDetailPage: React.FC = () => {
                     <button
                       onClick={() => setShowInviteModal(true)}
                       className="p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10"
-                      title="Invite Students"
+                      title="Invite People"
                     >
                       <UserPlus size={18} />
                     </button>
@@ -890,9 +946,9 @@ export const CourseDetailPage: React.FC = () => {
                 )}
               </div>
 
-              {studentsList.length > 0 ? (
+              {peopleList.length > 0 ? (
                 <div className="divide-y divide-black/5 dark:divide-white/5 text-sm">
-                  {studentsList.map((stu) => (
+                  {peopleList.map((stu) => (
                     <div key={stu.id} className="py-3 flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         {isLecturer && (
@@ -911,24 +967,24 @@ export const CourseDetailPage: React.FC = () => {
                             className="accent-[#059669]"
                           />
                         )}
-                        <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono font-medium text-xs">
+                        <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-medium text-xs">
                           {stu.avatarTag}
                         </div>
                         <span className="font-medium">{stu.name}</span>
                         {stu.isMuted && (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">
                             <SpeakerSlash size={12} />
                             <span>Muted</span>
                           </span>
                         )}
                       </div>
 
-                      <span className="text-xs font-mono opacity-50">{stu.matricOrStaffId}</span>
+                      <span className="text-xs opacity-50">{stu.matricOrStaffId}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-xs opacity-60 py-4">No students enrolled yet.</p>
+                <p className="text-xs opacity-60 py-4">No people enrolled yet.</p>
               )}
             </div>
           </div>
@@ -947,7 +1003,7 @@ export const CourseDetailPage: React.FC = () => {
               >
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
-                    <tr className="border-b border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 font-mono">
+                    <tr className="border-b border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5">
                       <th className="p-4 font-semibold min-w-[180px]">Student Name</th>
                       <th className="p-4 font-semibold text-center min-w-[110px]">
                         Overall Grade
@@ -961,7 +1017,7 @@ export const CourseDetailPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-black/5 dark:divide-white/5">
-                    {studentsList.map((stu) => {
+                    {peopleList.map((stu) => {
                       const stuSubs = courseSubmissions.filter((s) => s.studentId === stu.id);
                       const totalEarned = stuSubs.reduce((sum, s) => sum + (s.grade || 0), 0);
                       const totalPossible = stuSubs.reduce((sum, s) => sum + (s.maxPoints || 100), 0);
@@ -970,18 +1026,18 @@ export const CourseDetailPage: React.FC = () => {
                       return (
                         <tr key={stu.id} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
                           <td className="p-4 font-medium flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center font-mono text-[10px]">
+                            <span className="w-6 h-6 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center text-[10px]">
                               {stu.avatarTag}
                             </span>
                             <span>{stu.name}</span>
                           </td>
-                          <td className="p-4 text-center font-mono font-bold text-[#059669] dark:text-[#69DB7C]">
+                          <td className="p-4 text-center font-bold text-[#059669] dark:text-[#69DB7C]">
                             {percent !== null ? `${percent}%` : '—'}
                           </td>
                           {courseAssignments.map((a) => {
                             const sub = stuSubs.find((s) => s.assignmentId === a.id);
                             return (
-                              <td key={a.id} className="p-4 text-center font-mono">
+                              <td key={a.id} className="p-4 text-center">
                                 {sub?.grade !== undefined ? (
                                   <span className="font-semibold">{sub.grade}</span>
                                 ) : sub?.status === 'turned_in' ? (
@@ -1007,12 +1063,12 @@ export const CourseDetailPage: React.FC = () => {
                 >
                   <div className="space-y-1">
                     <h2 className="text-xl font-medium">{currentUser?.name}</h2>
-                    <p className="text-xs font-mono opacity-60">
+                    <p className="text-xs opacity-60">
                       ID: {currentUser?.matricOrStaffId} • {course.code}
                     </p>
                   </div>
                   <div className="text-right">
-                    <div className="text-2xl font-bold font-mono text-[#059669] dark:text-[#69DB7C]">
+                    <div className="text-2xl font-bold text-[#059669] dark:text-[#69DB7C]">
                       Coursework Active
                     </div>
                   </div>
@@ -1031,11 +1087,11 @@ export const CourseDetailPage: React.FC = () => {
                           }`}
                       >
                         <div>
-                          <div className="text-xs font-mono opacity-60">Due: {asg.dueDate}</div>
+                          <div className="text-xs opacity-60">Due: {asg.dueDate}</div>
                           <div className="text-sm font-medium mt-0.5">{asg.title}</div>
                         </div>
 
-                        <div className="text-right font-mono text-xs">
+                        <div className="text-right text-xs">
                           {sub?.grade !== undefined ? (
                             <span className="font-bold text-[#059669] dark:text-[#69DB7C]">
                               {sub.grade} / {asg.points}
@@ -1056,35 +1112,6 @@ export const CourseDetailPage: React.FC = () => {
         )}
       </div>
 
-      {/* Projector Code Expand Modal */}
-      {showExpandCodeModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 backdrop-blur-md"
-          onClick={() => setShowExpandCodeModal(false)}
-        >
-          <div
-            className={`p-10 rounded-3xl border shadow-2xl text-center space-y-6 max-w-lg w-full ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-              }`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-xs font-mono uppercase tracking-widest text-[#059669] dark:text-[#69DB7C]">
-              Classroom Invite Code
-            </div>
-            <div className="font-mono text-6xl font-bold tracking-wider py-4 select-all">
-              {course.code}
-            </div>
-            <p className="text-xs opacity-70">
-              Students can join instantly by going to Chalk and typing this code into their dashboard.
-            </p>
-            <button
-              onClick={() => setShowExpandCodeModal(false)}
-              className="btn-google px-6 py-2 rounded-full bg-[#059669] text-white text-xs font-medium cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Create Topic Modal */}
       {showTopicModal && (
@@ -1236,7 +1263,7 @@ export const CourseDetailPage: React.FC = () => {
               }`}
           >
             <div className="flex items-center justify-between pb-2 border-b border-black/10 dark:border-white/10">
-              <h3 className="font-medium text-sm">Invite Students / Teachers</h3>
+              <h3 className="font-medium text-sm">Invite People / Teachers</h3>
               <button
                 type="button"
                 onClick={() => setShowInviteModal(false)}
@@ -1248,9 +1275,9 @@ export const CourseDetailPage: React.FC = () => {
 
             <div className="space-y-3 text-xs">
               <p className="opacity-70">
-                Share this course invite code with your students, or invite directly by name/email:
+                Share this course invite code with your people, or invite directly by name/email:
               </p>
-              <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 font-mono text-center text-lg font-bold">
+              <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 text-center text-lg font-bold">
                 {course.code}
               </div>
               <div>
@@ -1341,20 +1368,34 @@ export const CourseDetailPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowSettingsModal(false)}
-                className="px-4 py-2 rounded-full border text-xs"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn-google px-5 py-2 rounded-full bg-[#059669] text-white text-xs font-medium cursor-pointer"
-              >
-                Save
-              </button>
+            <div className="flex items-center justify-between gap-2 pt-2">
+              {isLecturer ? (
+                <button
+                  type="button"
+                  onClick={handleDeleteCurrentCourse}
+                  className="px-3.5 py-2 rounded-full text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash size={14} />
+                  <span>Delete Course</span>
+                </button>
+              ) : (
+                <div />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(false)}
+                  className="px-4 py-2 rounded-full border text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-google px-5 py-2 rounded-full bg-[#059669] text-white text-xs font-medium cursor-pointer"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -1386,7 +1427,7 @@ export const CourseDetailPage: React.FC = () => {
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-medium truncate">{asg.title}</h3>
-            <div className="flex items-center gap-2 text-xs font-mono opacity-60 mt-0.5">
+            <div className="flex items-center gap-2 text-xs opacity-60 mt-0.5">
               <span>Due: {asg.dueDate}</span>
               <span>•</span>
               <span>{asg.points}</span>
@@ -1396,7 +1437,7 @@ export const CourseDetailPage: React.FC = () => {
 
         <div className="flex items-center gap-4 shrink-0">
           {isLecturer ? (
-            <div className="flex items-center gap-4 text-xs font-mono">
+            <div className="flex items-center gap-4 text-xs">
               <div className="text-center">
                 <span className="text-sm font-bold text-blue-500">{turnedIn}</span>
                 <span className="block text-[10px] opacity-60">Turned in</span>
@@ -1408,7 +1449,7 @@ export const CourseDetailPage: React.FC = () => {
             </div>
           ) : (
             <span
-              className={`px-3 py-1 rounded-full text-xs font-mono font-medium ${mySub?.status === 'graded'
+              className={`px-3 py-1 rounded-full text-xs font-medium ${mySub?.status === 'graded'
                 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
                 : mySub?.status === 'turned_in'
                   ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400'

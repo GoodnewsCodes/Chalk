@@ -12,23 +12,46 @@ import {
 import { useApp } from '../context/AppContext';
 
 export const ClassroomCalendarPage: React.FC = () => {
-  const { isDark, courses, assignments, liveRooms } = useApp();
-  const navigate = useNavigate();
+  const { isDark, courses, assignments, currentUser } = useApp();
+  const isLecturer = currentUser?.role === 'lecturer';
 
   const [selectedCourseId, setSelectedCourseId] = useState<string>('all');
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
+
+  const roleCourses = courses.filter((c) => {
+    if (c.isArchived || !currentUser) return false;
+    if (isLecturer) {
+      return (
+        c.lecturerId === currentUser.id ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(c.members?.some((m) => m.id === currentUser.id && m.role === 'lecturer'))
+      );
+    }
+    return (
+      Boolean(
+        c.members?.some(
+          (m) =>
+            m.id === currentUser.id ||
+            (Boolean(m.matricOrStaffId) &&
+              Boolean(currentUser.matricOrStaffId) &&
+              m.matricOrStaffId === currentUser.matricOrStaffId)
+        )
+      ) || Boolean(c.memberIds?.includes(currentUser.id))
+    );
+  });
 
   // Filter courses
   const filteredCourses =
     selectedCourseId === 'all'
-      ? courses.filter((c) => !c.isArchived)
-      : courses.filter((c) => c.id === selectedCourseId && !c.isArchived);
+      ? roleCourses
+      : roleCourses.filter((c) => c.id === selectedCourseId);
 
   // Filter assignments
-  const relevantAssignments = assignments.filter((a) =>
-    selectedCourseId === 'all' ? true : a.courseId === selectedCourseId
-  );
+  const relevantAssignments = assignments.filter((a) => {
+    if (!roleCourses.some((c) => c.id === a.courseId)) return false;
+    return selectedCourseId === 'all' ? true : a.courseId === selectedCourseId;
+  });
 
   // Month navigation helpers
   const year = currentDate.getFullYear();
@@ -62,45 +85,47 @@ export const ClassroomCalendarPage: React.FC = () => {
   const isCurrentMonth = todayDate.getFullYear() === year && todayDate.getMonth() === month;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-10 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-5 lg:p-6 max-w-4xl mx-auto space-y-4">
       {/* Top Controls Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pb-4 border-b border-black/10 dark:border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#059669]/10 text-[#059669] dark:text-[#69DB7C] flex items-center justify-center">
-            <CalendarBlank size={22} />
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pb-3 border-b border-black/10 dark:border-white/10">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-[#059669]/10 text-[#059669] dark:text-[#69DB7C] flex items-center justify-center">
+            <CalendarBlank size={18} />
           </div>
           <div>
-            <h1 className="text-xl font-medium tracking-tight">Google Classroom Calendar</h1>
-            <p className="text-xs text-black/60 dark:text-white/60">
+            <h1 className="text-base sm:text-lg font-medium tracking-tight">
+              {isLecturer ? 'Teaching Schedule' : 'Class Calendar'}
+            </h1>
+            <p className="text-[11px] text-black/60 dark:text-white/60">
               Assignments, project deadlines, and scheduled live lectures
             </p>
           </div>
         </div>
 
         {/* Date Controls & Course Filter */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Course Selector Dropdown */}
           <select
             value={selectedCourseId}
             onChange={(e) => setSelectedCourseId(e.target.value)}
-            className={`px-3.5 py-2 rounded-xl border text-xs font-medium focus:outline-none cursor-pointer ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            className={`px-3 py-1.5 rounded-xl border text-xs font-medium focus:outline-none cursor-pointer ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
               }`}
           >
-            <option value="all">All classes</option>
-            {courses
-              .filter((c) => !c.isArchived)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code}: {c.title}
-                </option>
-              ))}
+            <option value="all">
+              {isLecturer ? 'All teaching cohorts' : 'All enrolled classes'}
+            </option>
+            {roleCourses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.code}: {c.title}
+              </option>
+            ))}
           </select>
 
           {/* Month Navigator */}
-          <div className="flex items-center gap-1 border border-black/10 dark:border-white/10 rounded-full p-1 text-xs">
+          <div className="flex items-center gap-1 border border-black/10 dark:border-white/10 rounded-full p-0.5 text-xs">
             <button
               onClick={handleToday}
-              className="px-3 py-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 font-medium cursor-pointer"
+              className="px-2.5 py-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 font-medium cursor-pointer text-[11px]"
             >
               Today
             </button>
@@ -109,9 +134,9 @@ export const ClassroomCalendarPage: React.FC = () => {
               title="Previous Month"
               className="p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
             >
-              <CaretLeft size={16} />
+              <CaretLeft size={14} />
             </button>
-            <span className="font-medium px-2 min-w-[120px] text-center">
+            <span className="font-medium px-1.5 min-w-[105px] text-center text-xs">
               {monthNames[month]} {year}
             </span>
             <button
@@ -119,7 +144,7 @@ export const ClassroomCalendarPage: React.FC = () => {
               title="Next Month"
               className="p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
             >
-              <CaretRight size={16} />
+              <CaretRight size={14} />
             </button>
           </div>
         </div>
@@ -127,11 +152,11 @@ export const ClassroomCalendarPage: React.FC = () => {
 
       {/* Calendar Month Grid */}
       <div
-        className={`rounded-3xl border overflow-hidden shadow-sm ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+        className={`rounded-2xl border overflow-hidden shadow-sm ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
           }`}
       >
         {/* Day Name Headers */}
-        <div className="grid grid-cols-7 border-b border-black/10 dark:border-white/10 text-center font-mono text-xs font-semibold py-3 text-black/60 dark:text-white/60">
+        <div className="grid grid-cols-7 border-b border-black/10 dark:border-white/10 text-center text-[11px] font-semibold py-2 text-black/60 dark:text-white/60">
           <span>SUN</span>
           <span>MON</span>
           <span>TUE</span>
@@ -147,7 +172,7 @@ export const ClassroomCalendarPage: React.FC = () => {
           {leadingBlanks.map((b) => (
             <div
               key={`blank_${b}`}
-              className={`min-h-[100px] sm:min-h-[120px] p-2 border-r border-b border-black/5 dark:border-white/5 opacity-30 ${isDark ? 'bg-black/10' : 'bg-black/[0.02]'
+              className={`min-h-[64px] sm:min-h-[76px] p-1.5 border-r border-b border-black/5 dark:border-white/5 opacity-30 ${isDark ? 'bg-black/10' : 'bg-black/[0.02]'
                 }`}
             />
           ))}
@@ -173,19 +198,19 @@ export const ClassroomCalendarPage: React.FC = () => {
             return (
               <div
                 key={`day_${dayNum}`}
-                className={`min-h-[100px] sm:min-h-[120px] p-2 sm:p-2.5 border-r border-b border-black/10 dark:border-white/10 flex flex-col justify-between transition-colors ${isToday
-                    ? isDark
-                      ? 'bg-[#69DB7C]/5'
-                      : 'bg-emerald-500/5'
-                    : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]'
+                className={`min-h-[64px] sm:min-h-[76px] p-1.5 sm:p-2 border-r border-b border-black/10 dark:border-white/10 flex flex-col justify-between transition-colors ${isToday
+                  ? isDark
+                    ? 'bg-[#69DB7C]/5'
+                    : 'bg-emerald-500/5'
+                  : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]'
                   }`}
               >
                 {/* Day Header Number */}
                 <div className="flex items-center justify-between">
                   <span
-                    className={`inline-flex items-center justify-center text-xs font-mono font-medium rounded-full ${isToday
-                        ? 'w-6 h-6 bg-[#059669] text-white'
-                        : 'text-black/80 dark:text-white/80'
+                    className={`inline-flex items-center justify-center text-[11px] font-medium rounded-full ${isToday
+                      ? 'w-5 h-5 bg-[#059669] text-white'
+                      : 'text-black/80 dark:text-white/80'
                       }`}
                   >
                     {dayNum}
@@ -193,7 +218,7 @@ export const ClassroomCalendarPage: React.FC = () => {
                 </div>
 
                 {/* Day Events Container */}
-                <div className="space-y-1.5 mt-1 overflow-y-auto max-h-24">
+                <div className="space-y-1 mt-1 overflow-y-auto max-h-12">
                   {/* Live class badge if active today */}
                   {isLiveDay &&
                     filteredCourses
@@ -202,10 +227,10 @@ export const ClassroomCalendarPage: React.FC = () => {
                         <Link
                           key={`live_${c.id}`}
                           to={`/studio/${c.liveRoomCode}`}
-                          className="block px-2 py-1 rounded-lg text-[10px] font-medium font-mono truncate bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 hover:opacity-80"
+                          className="block px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-medium truncate bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 hover:opacity-80"
                         >
                           <div className="flex items-center gap-1 truncate">
-                            <VideoCamera size={11} className="shrink-0 animate-pulse text-emerald-500" />
+                            <VideoCamera size={10} className="shrink-0 animate-pulse text-emerald-500" />
                             <span className="truncate">{c.code} Live</span>
                           </div>
                         </Link>
@@ -213,12 +238,12 @@ export const ClassroomCalendarPage: React.FC = () => {
 
                   {/* Assignments due this day */}
                   {dayAssignments.map((asg) => {
-                    const c = courses.find((course) => course.id === asg.courseId);
+                    const c = roleCourses.find((course) => course.id === asg.courseId);
                     return (
                       <Link
                         key={asg.id}
                         to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                        className="block px-2 py-1 rounded-lg text-[10px] font-medium truncate border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 hover:border-[#059669] dark:hover:border-[#69DB7C]"
+                        className="block px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-medium truncate border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 hover:border-[#059669] dark:hover:border-[#69DB7C]"
                       >
                         <div className="flex items-center gap-1 truncate">
                           <span

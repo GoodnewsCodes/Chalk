@@ -12,7 +12,7 @@ import { useApp } from '../context/AppContext';
 import { BenchmarkMetrics } from '../types/chalk';
 
 export const BenchmarksPage: React.FC = () => {
-  const { isDark, activeRoomCode } = useApp();
+  const { isDark, isDemoMode, courses, activeRoomCode } = useApp();
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export const BenchmarksPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <span
-            className={`px-3 py-0.5 rounded-full font-mono text-xs font-medium ${isDark
+            className={`px-3 py-0.5 rounded-full text-xs font-medium ${isDark
               ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
               : 'bg-[#ECFDF5] text-[#059669]'
               }`}
@@ -90,7 +90,7 @@ export const BenchmarksPage: React.FC = () => {
 
         <div className="flex items-center gap-2.5">
           <Link
-            to={`/studio/${activeRoomCode || 'csc401-algo'}`}
+            to={`/studio/${activeRoomCode || courses[0]?.liveRoomCode || (isDemoMode ? 'csc401-algo' : 'live-studio')}`}
             className={`btn-google px-4 py-2.5 rounded-full font-medium text-xs inline-flex items-center gap-1.5 ${isDark
               ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
               : 'bg-[#059669] text-white hover:bg-[#047857]'
@@ -100,14 +100,14 @@ export const BenchmarksPage: React.FC = () => {
             <span>Test Live QoS HUD</span>
           </Link>
           <Link
-            to="/replays"
+            to="/catch-up"
             className={`btn-google px-4 py-2.5 rounded-full border font-medium text-xs inline-flex items-center gap-1.5 ${isDark
               ? 'border-[#3C4043] text-[#E3E3E3] hover:bg-[#28292A]'
               : 'border-[#DADCE0] text-[#202124] hover:bg-[#F8F9FA]'
               }`}
           >
             <PlayCircle size={16} weight="regular" />
-            <span>Inspect DVR Size</span>
+            <span>Open AI Catch Up</span>
           </Link>
         </div>
       </div>
@@ -115,7 +115,7 @@ export const BenchmarksPage: React.FC = () => {
       {/* Real Server Telemetry Snapshot Banner (if active client reports exist) */}
       {metrics && metrics.overall.samples > 0 && (
         <div
-          className={`p-5 rounded-3xl border flex flex-col sm:flex-row items-center justify-between gap-4 font-mono text-xs ${isDark ? 'bg-[#141E19] border-[#69DB7C]/40' : 'bg-[#ECFDF5] border-[#059669]/30'
+          className={`p-5 rounded-3xl border flex flex-col sm:flex-row items-center justify-between gap-4 text-xs ${isDark ? 'bg-[#141E19] border-[#69DB7C]/40' : 'bg-[#ECFDF5] border-[#059669]/30'
             }`}
         >
           <div className="flex items-center gap-3">
@@ -147,7 +147,7 @@ export const BenchmarksPage: React.FC = () => {
           >
             <div className="space-y-2.5">
               <span
-                className={`inline-block px-3 py-0.5 rounded-full font-mono text-[11px] font-medium ${m.isPrimary
+                className={`inline-block px-3 py-0.5 rounded-full text-[11px] font-medium ${m.isPrimary
                   ? 'bg-[#69DB7C] text-black font-semibold'
                   : isDark
                     ? 'bg-[#0F1713] border border-[#3C4043] text-[#9AA0A6]'
@@ -163,7 +163,7 @@ export const BenchmarksPage: React.FC = () => {
 
             <div className="space-y-1">
               <div
-                className={`font-display text-3xl font-medium font-mono tabular-nums ${m.isPrimary
+                className={`font-display text-3xl font-medium tabular-nums ${m.isPrimary
                   ? isDark
                     ? 'text-[#69DB7C]'
                     : 'text-[#059669]'
@@ -175,7 +175,7 @@ export const BenchmarksPage: React.FC = () => {
                 {m.hourlyMb}
               </div>
               <div
-                className={`text-xs font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'}`}
+                className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'}`}
               >
                 {m.bitrate}
               </div>
@@ -208,7 +208,7 @@ export const BenchmarksPage: React.FC = () => {
             <span>1-Hour Offline Recording Footprint</span>
           </div>
 
-          <div className="space-y-2.5 font-mono text-sm">
+          <div className="space-y-2.5 text-sm">
             <div
               className={`flex items-center justify-between p-3.5 rounded-2xl border ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
                 }`}
@@ -260,7 +260,7 @@ export const BenchmarksPage: React.FC = () => {
             <span>Chalkboard Stroke Sync Latency</span>
           </div>
 
-          <div className="space-y-2.5 font-mono text-sm">
+          <div className="space-y-2.5 text-sm">
             <div
               className={`flex items-center justify-between p-3.5 rounded-2xl border ${isDark ? 'bg-[#0F1713] border-[#3C4043]' : 'bg-[#F8F9FA] border-[#DADCE0]'
                 }`}

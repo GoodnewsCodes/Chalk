@@ -26,11 +26,25 @@ import {
   StrokeTool,
   StudentSubmission,
   TopicModel,
+  TranscriptSegment,
   UserProfile,
   VideoMode,
 } from '../types/chalk';
 import {
   DEFAULT_BOARD_STROKES,
+  DEMO_ANNOUNCEMENT_COMMENTS,
+  DEMO_ANNOUNCEMENTS,
+  DEMO_ASSIGNMENTS,
+  DEMO_ATTENDANCE,
+  DEMO_BOARD_STROKES,
+  DEMO_COURSE_IDS,
+  DEMO_COURSES,
+  DEMO_LECTURER_USER,
+  DEMO_POLLS,
+  DEMO_QUESTIONS,
+  DEMO_STUDENT_USER,
+  DEMO_SUBMISSIONS,
+  DEMO_TOPICS,
   INITIAL_ANNOUNCEMENT_COMMENTS,
   INITIAL_ANNOUNCEMENTS,
   INITIAL_ASSIGNMENTS,
@@ -40,8 +54,10 @@ import {
   INITIAL_QUESTIONS,
   INITIAL_SUBMISSIONS,
   INITIAL_TOPICS,
+  isDemoAccount,
 } from '../data/mockCatalog';
 import {
+  deleteCourseFromFirestore,
   ensureFirestoreSeedData,
   getCurrentFirebaseIdToken,
   isFirebaseConfigured,
@@ -60,7 +76,7 @@ import {
   MOCK_ASSIGNMENT_IDS,
 } from '../lib/firebase';
 
-export type ThemePreference = 'light' | 'dark' | 'system';
+export type ThemePreference = 'light' | 'dark';
 
 export interface ActiveRoomMeta {
   roomId: string;
@@ -68,6 +84,8 @@ export interface ActiveRoomMeta {
   courseCode: string;
   courseId: string | null;
   lecturerName: string;
+  hostUserId?: string | null;
+  lecturerId?: string | null;
   isLive: boolean;
   participantCount: number;
 }
@@ -76,6 +94,8 @@ export interface LiveRoomSummary {
   id: string;
   title: string;
   lecturerName: string;
+  hostUserId?: string | null;
+  lecturerId?: string | null;
   courseCode: string;
   courseId: string | null;
   participantCount: number;
@@ -94,6 +114,8 @@ interface AppContextValue {
 
   // Auth & Firebase Status
   currentUser: UserProfile | null;
+  isDemoMode: boolean;
+  switchDemoPersona: () => void;
   isAuthenticated: boolean;
   authLoading: boolean;
   firebaseReady: boolean;
@@ -194,6 +216,8 @@ interface AppContextValue {
   activeRoomCode: string;
   setActiveRoomCode: (code: string) => void;
   activeRoomInfo: ActiveRoomMeta;
+  endStudioSession: (roomId?: string) => Promise<void>;
+  sessionEndedRoom: string | null;
   socketConnected: boolean;
   selfSocketId: string;
   participants: StudioParticipant[];
@@ -228,6 +252,7 @@ interface AppContextValue {
   addSlide: () => void;
   laser: LaserPointer | null;
   emitLaser: (x: number, y: number, active: boolean) => void;
+  streamStroke: (stroke: StrokeData) => void;
   commitStroke: (stroke: StrokeData) => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -259,6 +284,8 @@ interface AppContextValue {
   isCaptionsOn: boolean;
   toggleCaptions: () => void;
   activeCaptions: { speaker: string; text: string }[];
+  transcriptLog: TranscriptSegment[];
+  sessionStartedAt: number;
   polls: StudioPoll[];
   createPoll: (question: string, options: string[], showResults: boolean) => void;
   votePoll: (pollId: string, optionId: string) => void;
@@ -289,16 +316,27 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 
 const STORAGE_USER_KEY = 'chalk_web_user_v2';
 const STORAGE_THEME_KEY = 'chalk_web_theme_pref_v2';
-const STORAGE_COURSES_KEY = 'chalk_firestore_cache_courses_v4';
-const STORAGE_ANNOUNCEMENTS_KEY = 'chalk_firestore_cache_announcements_v4';
-const STORAGE_ASSIGNMENTS_KEY = 'chalk_firestore_cache_assignments_v4';
-const STORAGE_TOPICS_KEY = 'chalk_cache_topics_v5';
-const STORAGE_SUBMISSIONS_KEY = 'chalk_cache_submissions_v5';
-const STORAGE_COMMENTS_KEY = 'chalk_cache_comments_v5';
-const STORAGE_POLLS_KEY = 'chalk_cache_polls_v5';
-const STORAGE_QUESTIONS_KEY = 'chalk_cache_questions_v5';
-const STORAGE_ATTENDANCE_KEY = 'chalk_cache_attendance_v5';
+const STORAGE_COURSES_KEY = 'chalk_real_courses_v5';
+const STORAGE_ANNOUNCEMENTS_KEY = 'chalk_real_announcements_v5';
+const STORAGE_ASSIGNMENTS_KEY = 'chalk_real_assignments_v5';
+const STORAGE_TOPICS_KEY = 'chalk_real_topics_v5';
+const STORAGE_SUBMISSIONS_KEY = 'chalk_real_submissions_v5';
+const STORAGE_COMMENTS_KEY = 'chalk_real_comments_v5';
+const STORAGE_POLLS_KEY = 'chalk_real_polls_v5';
+const STORAGE_QUESTIONS_KEY = 'chalk_real_questions_v5';
+const STORAGE_ATTENDANCE_KEY = 'chalk_real_attendance_v5';
 const STORAGE_HOST_SETTINGS_KEY = 'chalk_cache_host_settings_v5';
+const STORAGE_DELETED_COURSES_KEY = 'chalk_deleted_course_ids_v1';
+
+const STORAGE_DEMO_COURSES_KEY = 'chalk_demo_courses_v1';
+const STORAGE_DEMO_ANNOUNCEMENTS_KEY = 'chalk_demo_announcements_v1';
+const STORAGE_DEMO_ASSIGNMENTS_KEY = 'chalk_demo_assignments_v1';
+const STORAGE_DEMO_TOPICS_KEY = 'chalk_demo_topics_v1';
+const STORAGE_DEMO_SUBMISSIONS_KEY = 'chalk_demo_submissions_v1';
+const STORAGE_DEMO_COMMENTS_KEY = 'chalk_demo_comments_v1';
+const STORAGE_DEMO_POLLS_KEY = 'chalk_demo_polls_v1';
+const STORAGE_DEMO_QUESTIONS_KEY = 'chalk_demo_questions_v1';
+const STORAGE_DEMO_ATTENDANCE_KEY = 'chalk_demo_attendance_v1';
 const BACKEND_API_BASE = 'http://localhost:4000';
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -307,28 +345,17 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Theme State
+  // Theme State (Bi-modal: light / dark)
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() => {
     const saved = localStorage.getItem(STORAGE_THEME_KEY);
-    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+    if (saved === 'light' || saved === 'dark') return saved;
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
     return 'light';
   });
 
-  const [systemDark, setSystemDark] = useState<boolean>(() =>
-    typeof window !== 'undefined'
-      ? window.matchMedia('(prefers-color-scheme: dark)').matches
-      : false
-  );
-
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const listener = (e: MediaQueryListEvent) => setSystemDark(e.matches);
-    media.addEventListener('change', listener);
-    return () => media.removeEventListener('change', listener);
-  }, []);
-
-  const isDark =
-    themePreference === 'system' ? systemDark : themePreference === 'dark';
+  const isDark = themePreference === 'dark';
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
@@ -340,11 +367,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleTheme = () => {
-    setThemePreferenceState((prev) => {
-      if (prev === 'light') return 'dark';
-      if (prev === 'dark') return 'system';
-      return 'light';
-    });
+    setThemePreferenceState((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   // Firebase & Auth State
@@ -359,12 +382,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_USER_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw) as UserProfile;
+        if (isDemoAccount(parsed)) {
+          return parsed.role === 'lecturer'
+            ? { ...DEMO_LECTURER_USER }
+            : { ...DEMO_STUDENT_USER };
+        }
+        // Heal any real account that previously had leaked demo IDs or names
+        const isLeakedMatric =
+          parsed.matricOrStaffId === 'CSC/2022/1042' ||
+          parsed.matricOrStaffId === 'STAFF/CS/2018' ||
+          parsed.matricOrStaffId === 'CSC/2026/0198';
+        const isLeakedName =
+          parsed.name === 'Alex Okafor' || parsed.name === 'Prof. Adeleke O.';
+        const cleanName = isLeakedName
+          ? (parsed.email || 'Campus User').split('@')[0]
+          : parsed.name;
+        const cleanMatric = isLeakedMatric ? '' : (parsed.matricOrStaffId || '').trim();
+        return {
+          ...parsed,
+          name: cleanName,
+          matricOrStaffId: cleanMatric,
+          avatarTag:
+            isLeakedName || parsed.avatarTag === 'AO' || parsed.avatarTag === 'PA'
+              ? cleanName.slice(0, 2).toUpperCase() || 'CU'
+              : parsed.avatarTag,
+          isProfileComplete: Boolean(parsed.isProfileComplete || Boolean(cleanMatric)),
+          isDemo: false,
+        };
+      }
     } catch {
       // ignore
     }
     return null;
   });
+
+  const isDemoMode = isDemoAccount(currentUser);
 
   const [guestName, setGuestName] = useState<string>('Guest Student');
   const [guestId] = useState<string>(() => {
@@ -382,106 +436,186 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isAuthenticated = Boolean(currentUser && currentUser.isProfileComplete);
 
   const saveUserLocally = (user: UserProfile | null) => {
-    setCurrentUser(user);
     if (user) {
-      localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
+      const cleanMatric = (user.matricOrStaffId || '').trim();
+      const isComplete = isDemoAccount(user)
+        ? true
+        : Boolean(user.isProfileComplete || Boolean(cleanMatric));
+      const normalizedUser: UserProfile = isDemoAccount(user)
+        ? { ...user, isProfileComplete: true, isDemo: true }
+        : { ...user, isProfileComplete: isComplete, isDemo: false };
+      setCurrentUser(normalizedUser);
+      localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(normalizedUser));
     } else {
+      setCurrentUser(null);
       localStorage.removeItem(STORAGE_USER_KEY);
     }
   };
+
+  const switchDemoPersona = useCallback(() => {
+    if (!isDemoAccount(currentUser)) return;
+    if (currentUser?.role === 'lecturer') {
+      saveUserLocally({ ...DEMO_STUDENT_USER });
+    } else {
+      saveUserLocally({ ...DEMO_LECTURER_USER });
+    }
+  }, [currentUser]);
 
   const refreshFirebaseConnection = () => {
     setFirebaseReady(isFirebaseConfigured());
     setFirebaseVersion((v) => v + 1);
   };
 
+  const loadScopedArray = <T,>(
+    demoMode: boolean,
+    demoKey: string,
+    realKey: string,
+    demoFallback: T[],
+    realFallback: T[],
+    filterReal?: (item: T) => boolean
+  ): T[] => {
+    try {
+      const key = demoMode ? demoKey : realKey;
+      const cached = localStorage.getItem(key);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          if (demoMode) {
+            return parsed.length > 0 ? parsed : demoFallback;
+          }
+          return filterReal ? parsed.filter(filterReal) : parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return demoMode ? demoFallback : realFallback;
+  };
+
   // Courses, Announcements, Assignments & Live Rooms State
-  const [courses, setCourses] = useState<CourseModel[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_COURSES_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((c) => c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id));
+  const deletedCourseIdsRef = useRef<Set<string>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem(STORAGE_DELETED_COURSES_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return new Set(parsed.map((id) => String(id).toLowerCase()));
+          }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
-    return INITIAL_COURSES;
-  });
+      return new Set<string>();
+    })()
+  );
 
-  const [announcements, setAnnouncements] = useState<CourseAnnouncement[]>(() => {
+  const persistDeletedCourseIds = () => {
     try {
-      const cached = localStorage.getItem(STORAGE_ANNOUNCEMENTS_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (a) =>
-              a &&
-              typeof a.id === 'string' &&
-              !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
-              typeof a.courseId === 'string' &&
-              !MOCK_COURSE_IDS.has(a.courseId)
-          );
-        }
-      }
+      localStorage.setItem(
+        STORAGE_DELETED_COURSES_KEY,
+        JSON.stringify(Array.from(deletedCourseIdsRef.current))
+      );
     } catch {
       // ignore
     }
-    return INITIAL_ANNOUNCEMENTS;
-  });
+  };
 
-  const [assignments, setAssignments] = useState<ClassworkAssignment[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_ASSIGNMENTS_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (a) =>
-              a &&
-              typeof a.id === 'string' &&
-              !MOCK_ASSIGNMENT_IDS.has(a.id) &&
-              typeof a.courseId === 'string' &&
-              !MOCK_COURSE_IDS.has(a.courseId)
-          );
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return INITIAL_ASSIGNMENTS;
-  });
+  const [courses, setCourses] = useState<CourseModel[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_COURSES_KEY,
+      STORAGE_COURSES_KEY,
+      DEMO_COURSES,
+      INITIAL_COURSES,
+      (c) =>
+        Boolean(
+          c &&
+          typeof c.id === 'string' &&
+          !MOCK_COURSE_IDS.has(c.id) &&
+          !DEMO_COURSE_IDS.has(c.id) &&
+          !deletedCourseIdsRef.current.has(c.id.toLowerCase())
+        )
+    )
+  );
+
+  const [announcements, setAnnouncements] = useState<CourseAnnouncement[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_ANNOUNCEMENTS_KEY,
+      STORAGE_ANNOUNCEMENTS_KEY,
+      DEMO_ANNOUNCEMENTS,
+      INITIAL_ANNOUNCEMENTS,
+      (a) =>
+        Boolean(
+          a &&
+          typeof a.id === 'string' &&
+          !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+          typeof a.courseId === 'string' &&
+          !MOCK_COURSE_IDS.has(a.courseId) &&
+          !DEMO_COURSE_IDS.has(a.courseId)
+        )
+    )
+  );
+
+  const [assignments, setAssignments] = useState<ClassworkAssignment[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_ASSIGNMENTS_KEY,
+      STORAGE_ASSIGNMENTS_KEY,
+      DEMO_ASSIGNMENTS,
+      INITIAL_ASSIGNMENTS,
+      (a) =>
+        Boolean(
+          a &&
+          typeof a.id === 'string' &&
+          !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+          typeof a.courseId === 'string' &&
+          !MOCK_COURSE_IDS.has(a.courseId) &&
+          !DEMO_COURSE_IDS.has(a.courseId)
+        )
+    )
+  );
 
   const [liveRooms, setLiveRooms] = useState<LiveRoomSummary[]>([]);
 
   // Topics State
-  const [topics, setTopics] = useState<TopicModel[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_TOPICS_KEY);
-      if (cached) return JSON.parse(cached);
-    } catch { }
-    return INITIAL_TOPICS;
-  });
+  const [topics, setTopics] = useState<TopicModel[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_TOPICS_KEY,
+      STORAGE_TOPICS_KEY,
+      DEMO_TOPICS,
+      INITIAL_TOPICS,
+      (t) => Boolean(t && !DEMO_COURSE_IDS.has(t.courseId))
+    )
+  );
 
   // Student Submissions State
-  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_SUBMISSIONS_KEY);
-      if (cached) return JSON.parse(cached);
-    } catch { }
-    return INITIAL_SUBMISSIONS;
-  });
+  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_SUBMISSIONS_KEY,
+      STORAGE_SUBMISSIONS_KEY,
+      DEMO_SUBMISSIONS,
+      INITIAL_SUBMISSIONS,
+      (s) => Boolean(s && !DEMO_COURSE_IDS.has(s.courseId))
+    )
+  );
 
   // Announcement Comments State
   const [announcementComments, setAnnouncementComments] = useState<Record<string, CourseAnnouncementComment[]>>(() => {
+    const demo = isDemoAccount(currentUser);
     try {
-      const cached = localStorage.getItem(STORAGE_COMMENTS_KEY);
-      if (cached) return JSON.parse(cached);
+      const cached = localStorage.getItem(demo ? STORAGE_DEMO_COMMENTS_KEY : STORAGE_COMMENTS_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') {
+          return demo && Object.keys(parsed).length === 0 ? DEMO_ANNOUNCEMENT_COMMENTS : parsed;
+        }
+      }
     } catch { }
-    return INITIAL_ANNOUNCEMENT_COMMENTS;
+    return demo ? DEMO_ANNOUNCEMENT_COMMENTS : INITIAL_ANNOUNCEMENT_COMMENTS;
   });
 
   // Google Studio Features State
@@ -489,28 +623,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [isCaptionsOn, setIsCaptionsOn] = useState<boolean>(false);
   const [activeCaptions, setActiveCaptions] = useState<{ speaker: string; text: string }[]>([]);
-  const [polls, setPolls] = useState<StudioPoll[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_POLLS_KEY);
-      if (cached) return JSON.parse(cached);
-    } catch { }
-    return INITIAL_POLLS;
-  });
-  const [questions, setQuestions] = useState<StudioQuestion[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_QUESTIONS_KEY);
-      if (cached) return JSON.parse(cached);
-    } catch { }
-    return INITIAL_QUESTIONS;
-  });
+  const [transcriptLog, setTranscriptLog] = useState<TranscriptSegment[]>([]);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number>(() => Date.now());
+  const [polls, setPolls] = useState<StudioPoll[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_POLLS_KEY,
+      STORAGE_POLLS_KEY,
+      DEMO_POLLS,
+      INITIAL_POLLS
+    )
+  );
+  const [questions, setQuestions] = useState<StudioQuestion[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_QUESTIONS_KEY,
+      STORAGE_QUESTIONS_KEY,
+      DEMO_QUESTIONS,
+      INITIAL_QUESTIONS
+    )
+  );
   const [breakoutSession, setBreakoutSession] = useState<BreakoutSession | null>(null);
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
-    try {
-      const cached = localStorage.getItem(STORAGE_ATTENDANCE_KEY);
-      if (cached) return JSON.parse(cached);
-    } catch { }
-    return INITIAL_ATTENDANCE;
-  });
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() =>
+    loadScopedArray(
+      isDemoAccount(currentUser),
+      STORAGE_DEMO_ATTENDANCE_KEY,
+      STORAGE_ATTENDANCE_KEY,
+      DEMO_ATTENDANCE,
+      INITIAL_ATTENDANCE
+    )
+  );
   const [hostSettings, setHostSettings] = useState<HostControlSettings>(() => {
     const defaults: HostControlSettings = {
       hostManagement: true,
@@ -534,29 +676,163 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [prejoinMic, setPrejoinMic] = useState<boolean>(true);
   const [prejoinBlur, setPrejoinBlur] = useState<'off' | 'slight' | 'strong' | 'classroom'>('off');
 
+  // Swap datasets cleanly whenever switching between Demo Mode and a Real Account
+  const prevDemoModeRef = useRef<boolean>(isDemoMode);
   useEffect(() => {
-    localStorage.setItem(STORAGE_TOPICS_KEY, JSON.stringify(topics));
-  }, [topics]);
+    if (prevDemoModeRef.current === isDemoMode) return;
+    prevDemoModeRef.current = isDemoMode;
+
+    setCourses(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_COURSES_KEY,
+        STORAGE_COURSES_KEY,
+        DEMO_COURSES,
+        INITIAL_COURSES,
+        (c) => Boolean(c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id) && !DEMO_COURSE_IDS.has(c.id))
+      )
+    );
+    setAnnouncements(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_ANNOUNCEMENTS_KEY,
+        STORAGE_ANNOUNCEMENTS_KEY,
+        DEMO_ANNOUNCEMENTS,
+        INITIAL_ANNOUNCEMENTS,
+        (a) =>
+          Boolean(
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId) &&
+            !DEMO_COURSE_IDS.has(a.courseId)
+          )
+      )
+    );
+    setAssignments(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_ASSIGNMENTS_KEY,
+        STORAGE_ASSIGNMENTS_KEY,
+        DEMO_ASSIGNMENTS,
+        INITIAL_ASSIGNMENTS,
+        (a) =>
+          Boolean(
+            a &&
+            typeof a.id === 'string' &&
+            !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+            typeof a.courseId === 'string' &&
+            !MOCK_COURSE_IDS.has(a.courseId) &&
+            !DEMO_COURSE_IDS.has(a.courseId)
+          )
+      )
+    );
+    setTopics(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_TOPICS_KEY,
+        STORAGE_TOPICS_KEY,
+        DEMO_TOPICS,
+        INITIAL_TOPICS,
+        (t) => Boolean(t && !DEMO_COURSE_IDS.has(t.courseId))
+      )
+    );
+    setSubmissions(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_SUBMISSIONS_KEY,
+        STORAGE_SUBMISSIONS_KEY,
+        DEMO_SUBMISSIONS,
+        INITIAL_SUBMISSIONS,
+        (s) => Boolean(s && !DEMO_COURSE_IDS.has(s.courseId))
+      )
+    );
+    try {
+      const cachedComments = localStorage.getItem(
+        isDemoMode ? STORAGE_DEMO_COMMENTS_KEY : STORAGE_COMMENTS_KEY
+      );
+      if (cachedComments) {
+        const parsed = JSON.parse(cachedComments);
+        setAnnouncementComments(
+          isDemoMode && Object.keys(parsed).length === 0 ? DEMO_ANNOUNCEMENT_COMMENTS : parsed
+        );
+      } else {
+        setAnnouncementComments(isDemoMode ? DEMO_ANNOUNCEMENT_COMMENTS : INITIAL_ANNOUNCEMENT_COMMENTS);
+      }
+    } catch {
+      setAnnouncementComments(isDemoMode ? DEMO_ANNOUNCEMENT_COMMENTS : INITIAL_ANNOUNCEMENT_COMMENTS);
+    }
+    setPolls(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_POLLS_KEY,
+        STORAGE_POLLS_KEY,
+        DEMO_POLLS,
+        INITIAL_POLLS
+      )
+    );
+    setQuestions(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_QUESTIONS_KEY,
+        STORAGE_QUESTIONS_KEY,
+        DEMO_QUESTIONS,
+        INITIAL_QUESTIONS
+      )
+    );
+    setAttendanceRecords(
+      loadScopedArray(
+        isDemoMode,
+        STORAGE_DEMO_ATTENDANCE_KEY,
+        STORAGE_ATTENDANCE_KEY,
+        DEMO_ATTENDANCE,
+        INITIAL_ATTENDANCE
+      )
+    );
+  }, [isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_SUBMISSIONS_KEY, JSON.stringify(submissions));
-  }, [submissions]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_TOPICS_KEY : STORAGE_TOPICS_KEY,
+      JSON.stringify(topics)
+    );
+  }, [topics, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_COMMENTS_KEY, JSON.stringify(announcementComments));
-  }, [announcementComments]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_SUBMISSIONS_KEY : STORAGE_SUBMISSIONS_KEY,
+      JSON.stringify(submissions)
+    );
+  }, [submissions, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_POLLS_KEY, JSON.stringify(polls));
-  }, [polls]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_COMMENTS_KEY : STORAGE_COMMENTS_KEY,
+      JSON.stringify(announcementComments)
+    );
+  }, [announcementComments, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_QUESTIONS_KEY, JSON.stringify(questions));
-  }, [questions]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_POLLS_KEY : STORAGE_POLLS_KEY,
+      JSON.stringify(polls)
+    );
+  }, [polls, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_ATTENDANCE_KEY, JSON.stringify(attendanceRecords));
-  }, [attendanceRecords]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_QUESTIONS_KEY : STORAGE_QUESTIONS_KEY,
+      JSON.stringify(questions)
+    );
+  }, [questions, isDemoMode]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_ATTENDANCE_KEY : STORAGE_ATTENDANCE_KEY,
+      JSON.stringify(attendanceRecords)
+    );
+  }, [attendanceRecords, isDemoMode]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_HOST_SETTINGS_KEY, JSON.stringify(hostSettings));
@@ -565,7 +841,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Purge legacy cache versions from localStorage
   useEffect(() => {
     try {
-      ['v1', 'v2', 'v3'].forEach((ver) => {
+      ['v1', 'v2', 'v3', 'v4'].forEach((ver) => {
         localStorage.removeItem(`chalk_firestore_cache_courses_${ver}`);
         localStorage.removeItem(`chalk_firestore_cache_announcements_${ver}`);
         localStorage.removeItem(`chalk_firestore_cache_assignments_${ver}`);
@@ -576,18 +852,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_COURSES_KEY, JSON.stringify(courses));
-  }, [courses]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_COURSES_KEY : STORAGE_COURSES_KEY,
+      JSON.stringify(courses)
+    );
+  }, [courses, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_ANNOUNCEMENTS_KEY, JSON.stringify(announcements));
-  }, [announcements]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_ANNOUNCEMENTS_KEY : STORAGE_ANNOUNCEMENTS_KEY,
+      JSON.stringify(announcements)
+    );
+  }, [announcements, isDemoMode]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_ASSIGNMENTS_KEY, JSON.stringify(assignments));
-  }, [assignments]);
+    localStorage.setItem(
+      isDemoMode ? STORAGE_DEMO_ASSIGNMENTS_KEY : STORAGE_ASSIGNMENTS_KEY,
+      JSON.stringify(assignments)
+    );
+  }, [assignments, isDemoMode]);
 
-  // Firebase auth sync
+  // Firebase auth sync (only when not actively in Demo Mode)
   useEffect(() => {
     const configured = isFirebaseConfigured();
     setFirebaseReady(configured);
@@ -601,16 +886,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let unsubCatalog: (() => void) | null = null;
 
     const unsubAuth = subscribeToFirebaseAuth((fbProfile) => {
+      // Do not overwrite an active Demo Mode session with a lingering Firebase Auth session
+      const rawStored = localStorage.getItem(STORAGE_USER_KEY);
+      if (rawStored) {
+        try {
+          const storedUser = JSON.parse(rawStored) as UserProfile;
+          if (isDemoAccount(storedUser)) {
+            setAuthLoading(false);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       if (fbProfile) {
         saveUserLocally(fbProfile);
         ensureFirestoreSeedData();
         if (!unsubCatalog) {
           unsubCatalog = subscribeToFirestoreCatalog({
-            onCourses: (remoteCourses) => setCourses(remoteCourses),
+            onCourses: (remoteCourses) =>
+              setCourses((prev) => {
+                const map = new Map<string, CourseModel>();
+                for (const c of prev) {
+                  if (
+                    !DEMO_COURSE_IDS.has(c.id) &&
+                    !MOCK_COURSE_IDS.has(c.id) &&
+                    !deletedCourseIdsRef.current.has(c.id.toLowerCase())
+                  ) {
+                    map.set(c.id, c);
+                  }
+                }
+                for (const c of remoteCourses) {
+                  if (
+                    !DEMO_COURSE_IDS.has(c.id) &&
+                    !MOCK_COURSE_IDS.has(c.id) &&
+                    !deletedCourseIdsRef.current.has(c.id.toLowerCase())
+                  ) {
+                    map.set(c.id, c);
+                  }
+                }
+                return Array.from(map.values());
+              }),
             onAnnouncements: (remoteAnnouncements) =>
-              setAnnouncements(remoteAnnouncements),
+              setAnnouncements((prev) => {
+                const map = new Map<string, CourseAnnouncement>();
+                for (const a of prev) {
+                  if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+                }
+                for (const a of remoteAnnouncements) {
+                  if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+                }
+                return Array.from(map.values());
+              }),
             onAssignments: (remoteAssignments) =>
-              setAssignments(remoteAssignments),
+              setAssignments((prev) => {
+                const map = new Map<string, ClassworkAssignment>();
+                for (const a of prev) {
+                  if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+                }
+                for (const a of remoteAssignments) {
+                  if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+                }
+                return Array.from(map.values());
+              }),
           });
         }
       } else if (unsubCatalog) {
@@ -628,23 +967,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Backend REST client
   const backendApiSupportedRef = useRef<boolean | null>(null);
+  const coursesRef = useRef<CourseModel[]>(courses);
+  coursesRef.current = courses;
 
   const checkBackendCatalogSupport = async (): Promise<boolean> => {
-    if (backendApiSupportedRef.current !== null) {
-      return backendApiSupportedRef.current;
+    if (backendApiSupportedRef.current === true) {
+      return true;
     }
     try {
       const res = await fetch(`${BACKEND_API_BASE}/health`);
       if (!res.ok) {
-        backendApiSupportedRef.current = false;
         return false;
       }
       const data = await res.json();
       const supported = Boolean(data?.capabilities?.firestoreCatalog);
-      backendApiSupportedRef.current = supported;
+      if (supported) {
+        backendApiSupportedRef.current = true;
+      }
       return supported;
     } catch {
-      backendApiSupportedRef.current = false;
       return false;
     }
   };
@@ -652,9 +993,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resolveAuthTokenForBackend = async (
     userOverride?: UserProfile | null
   ): Promise<string> => {
+    const target = userOverride ?? currentUser;
+    if (isDemoAccount(target)) {
+      return `mock_firebase_token_${target!.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+    }
     const fbToken = await getCurrentFirebaseIdToken();
     if (fbToken) return fbToken;
-    const target = userOverride ?? currentUser;
     if (target?.id) {
       return `mock_firebase_token_${target.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
     }
@@ -668,6 +1012,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userOverride?: UserProfile | null
   ) => {
     try {
+      const target = userOverride ?? currentUser;
+      // Do not write demo catalog mutations to the real backend store
+      if (
+        isDemoAccount(target) &&
+        method !== 'GET' &&
+        (path.startsWith('/api/courses') ||
+          path.startsWith('/api/announcements') ||
+          path.startsWith('/api/assignments') ||
+          path.startsWith('/api/users') ||
+          path.startsWith('/api/auth'))
+      ) {
+        return null;
+      }
+
       const isSupported = await checkBackendCatalogSupport();
       if (!isSupported) return null;
 
@@ -689,48 +1047,116 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshCourses = useCallback(async () => {
-    if (!currentUser) return;
+    if (!currentUser || isDemoAccount(currentUser)) return;
     const [coursesRes, annRes, asgnRes] = await Promise.all([
       syncWithBackendApi('/api/courses', 'GET', undefined, currentUser),
       syncWithBackendApi('/api/announcements', 'GET', undefined, currentUser),
       syncWithBackendApi('/api/assignments', 'GET', undefined, currentUser),
     ]);
     if (Array.isArray(coursesRes?.courses)) {
-      setCourses(
-        coursesRes.courses.filter(
-          (c: any) => c && typeof c.id === 'string' && !MOCK_COURSE_IDS.has(c.id)
-        )
+      const remoteCourses = coursesRes.courses.filter(
+        (c: any) =>
+          c &&
+          typeof c.id === 'string' &&
+          !MOCK_COURSE_IDS.has(c.id) &&
+          !DEMO_COURSE_IDS.has(c.id) &&
+          !deletedCourseIdsRef.current.has(c.id.toLowerCase())
       );
+      setCourses((prev) => {
+        // Merge remote courses with any locally created real courses not yet synced
+        const map = new Map<string, CourseModel>();
+        for (const c of prev) {
+          if (
+            !DEMO_COURSE_IDS.has(c.id) &&
+            !MOCK_COURSE_IDS.has(c.id) &&
+            !deletedCourseIdsRef.current.has(c.id.toLowerCase())
+          ) {
+            map.set(c.id, c);
+          }
+        }
+        for (const c of remoteCourses) {
+          map.set(c.id, c);
+        }
+        return Array.from(map.values());
+      });
+
+      // Backfill any locally created real courses that are missing from the backend database
+      const remoteIds = new Set(remoteCourses.map((c: any) => String(c.id).toLowerCase()));
+      const unsyncedLocal = coursesRef.current.filter(
+        (c) =>
+          c &&
+          c.id &&
+          !DEMO_COURSE_IDS.has(c.id) &&
+          !MOCK_COURSE_IDS.has(c.id) &&
+          !remoteIds.has(c.id.toLowerCase()) &&
+          (currentUser.role === 'lecturer' ||
+            c.lecturerId?.toLowerCase() === currentUser.id.toLowerCase())
+      );
+      for (const localCourse of unsyncedLocal) {
+        syncWithBackendApi(
+          '/api/courses',
+          'POST',
+          {
+            ...localCourse,
+            role: 'lecturer',
+          },
+          currentUser
+        ).catch(() => { });
+        saveCourseToFirestore(localCourse).catch(() => { });
+      }
     }
     if (Array.isArray(annRes?.announcements)) {
-      setAnnouncements(
-        annRes.announcements.filter(
-          (a: any) =>
-            a &&
-            typeof a.id === 'string' &&
-            !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
-            typeof a.courseId === 'string' &&
-            !MOCK_COURSE_IDS.has(a.courseId)
-        )
+      const remoteAnns = annRes.announcements.filter(
+        (a: any) =>
+          a &&
+          typeof a.id === 'string' &&
+          !MOCK_ANNOUNCEMENT_IDS.has(a.id) &&
+          typeof a.courseId === 'string' &&
+          !MOCK_COURSE_IDS.has(a.courseId) &&
+          !DEMO_COURSE_IDS.has(a.courseId)
       );
+      setAnnouncements((prev) => {
+        const map = new Map<string, CourseAnnouncement>();
+        for (const a of prev) {
+          if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+        }
+        for (const a of remoteAnns) {
+          map.set(a.id, a);
+        }
+        return Array.from(map.values());
+      });
     }
     if (Array.isArray(asgnRes?.assignments)) {
-      setAssignments(
-        asgnRes.assignments.filter(
-          (a: any) =>
-            a &&
-            typeof a.id === 'string' &&
-            !MOCK_ASSIGNMENT_IDS.has(a.id) &&
-            typeof a.courseId === 'string' &&
-            !MOCK_COURSE_IDS.has(a.courseId)
-        )
+      const remoteAsgs = asgnRes.assignments.filter(
+        (a: any) =>
+          a &&
+          typeof a.id === 'string' &&
+          !MOCK_ASSIGNMENT_IDS.has(a.id) &&
+          typeof a.courseId === 'string' &&
+          !MOCK_COURSE_IDS.has(a.courseId) &&
+          !DEMO_COURSE_IDS.has(a.courseId)
       );
+      setAssignments((prev) => {
+        const map = new Map<string, ClassworkAssignment>();
+        for (const a of prev) {
+          if (!DEMO_COURSE_IDS.has(a.courseId)) map.set(a.id, a);
+        }
+        for (const a of remoteAsgs) {
+          map.set(a.id, a);
+        }
+        return Array.from(map.values());
+      });
     }
-  }, [currentUser?.id]);
+  }, [currentUser?.id, isDemoMode]);
 
   useEffect(() => {
     refreshCourses();
-  }, [refreshCourses]);
+    if (!currentUser || isDemoAccount(currentUser)) return;
+    const interval = setInterval(() => {
+      refreshCourses();
+    }, 8_000);
+    return () => clearInterval(interval);
+  }, [refreshCourses, currentUser]);
 
   // Poll live rooms from backend
   useEffect(() => {
@@ -741,7 +1167,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!res.ok) return;
         const data = await res.json();
         if (active && Array.isArray(data)) {
-          setLiveRooms(data);
+          setLiveRooms(
+            isDemoMode
+              ? data
+              : data.filter((r: any) => {
+                  if (!r) return false;
+                  const rId = String(r.id || '').toLowerCase();
+                  const cId = String(r.courseId || '').toLowerCase();
+                  return (
+                    rId !== 'csc401-algo' &&
+                    rId !== 'csc412-compilers' &&
+                    rId !== 'mth304-linear' &&
+                    rId !== 'live-studio' &&
+                    !DEMO_COURSE_IDS.has(cId)
+                  );
+                })
+          );
         }
       } catch {
         // ignore
@@ -753,24 +1194,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [isDemoMode]);
 
   // Classroom & Studio State
   const [activeRoomCode, setActiveRoomCodeState] = useState<string>('');
+  const [sessionEndedRoom, setSessionEndedRoom] = useState<string | null>(null);
   const [activeRoomInfo, setActiveRoomInfo] = useState<ActiveRoomMeta>({
     roomId: '',
     title: '',
     courseCode: '',
     courseId: null,
     lecturerName: '',
+    hostUserId: null,
+    lecturerId: null,
     isLive: false,
     participantCount: 0,
   });
-
-  const setActiveRoomCode = (code: string) => {
-    const cleaned = code.trim();
-    setActiveRoomCodeState(cleaned);
-  };
 
   const [socketConnected, setSocketConnected] = useState<boolean>(false);
   const [selfSocketId, setSelfSocketId] = useState<string>('');
@@ -797,6 +1236,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [totalSlides, setTotalSlides] = useState<number>(1);
   const [laser, setLaser] = useState<LaserPointer | null>(null);
 
+  const setActiveRoomCode = (code: string) => {
+    const cleaned = code.trim();
+    setActiveRoomCodeState(cleaned);
+    setSessionEndedRoom(null);
+    setStrokes([]);
+    setRedoStack([]);
+    setActiveSlideIndex(0);
+    setChatMessages([]);
+    setTranscriptLog([]);
+    setPolls([]);
+    setQuestions([]);
+    setLaser(null);
+  };
+
   // Telemetry & QoS
   const [networkProfile, setNetworkProfileState] = useState<NetworkProfile>('fast4G');
   const [currentBitrateKbps, setCurrentBitrateKbps] = useState<number>(24.2);
@@ -816,7 +1269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!firebaseReady || !activeRoomCode || !currentUser?.id) return;
 
     const unsubRoom = subscribeToFirestoreRoom(activeRoomCode, (roomData) => {
-      if (roomData.strokes && roomData.strokes.length > 0) {
+      if (Array.isArray(roomData.strokes)) {
         setStrokes(roomData.strokes);
       }
       if (typeof roomData.activeSlideIndex === 'number') {
@@ -901,9 +1354,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [sendSignal]
   );
 
-  // Initialize Socket.io connection for Live Studio
+    // Initialize Socket.io connection for Live Studio
   useEffect(() => {
-    if (!activeRoomCode) {
+    const isRealUser = Boolean(currentUser && !isDemoAccount(currentUser));
+    const uidLower = (currentUser?.id || '').toLowerCase();
+    const hasRoleCourse = courses.some((c) => {
+      if (c.isArchived || !currentUser) return false;
+      if (currentUser.role === 'lecturer') {
+        return (
+          (c.lecturerId || '').toLowerCase() === uidLower ||
+          (Boolean(currentUser.name) &&
+            c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+          Boolean(
+            c.members?.some(
+              (m) => (m.id || '').toLowerCase() === uidLower && m.role === 'lecturer'
+            )
+          )
+        );
+      }
+      return (
+        Boolean(c.memberIds?.some((id) => id.toLowerCase() === uidLower)) ||
+        Boolean(
+          c.members?.some(
+            (m) =>
+              (m.id || '').toLowerCase() === uidLower ||
+              (Boolean(m.matricOrStaffId) &&
+                Boolean(currentUser.matricOrStaffId) &&
+                m.matricOrStaffId === currentUser.matricOrStaffId)
+          )
+        )
+      );
+    });
+
+    if (!activeRoomCode || (isRealUser && !hasRoleCourse)) {
       setSocketConnected(false);
       setParticipants([]);
       return;
@@ -940,9 +1423,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.emit('join_room', {
         roomId: activeRoomCode,
         title: matchedCourse?.title || `Room ${activeRoomCode}`,
-        courseCode: matchedCourse?.code || 'CSC 401',
+        courseCode: matchedCourse?.code || (isDemoAccount(currentUser) ? 'CSC 401' : activeRoomCode.toUpperCase().slice(0, 10)),
         courseId: matchedCourse?.id || null,
-        lecturerName: matchedCourse?.lecturerName || '',
+        lecturerName: matchedCourse?.lecturerName || (currentUser?.role === 'lecturer' ? currentUser.name : ''),
+        lecturerId: matchedCourse?.lecturerId || (currentUser?.role === 'lecturer' ? currentUser.id : undefined),
         userName: currentUser?.name || guestName || 'Guest Student',
         role: currentUser?.role || 'student',
         avatarTag: currentUser?.avatarTag || (guestName ? guestName.slice(0, 2).toUpperCase() : 'GS'),
@@ -972,7 +1456,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setStageLayout(snapshot.stageLayout);
       }
       if (Array.isArray(snapshot.strokes)) {
-        setStrokes(snapshot.strokes.length ? snapshot.strokes : (snapshot.roomId === 'csc401-algo' ? DEFAULT_BOARD_STROKES : []));
+        setStrokes(
+          snapshot.strokes.length
+            ? snapshot.strokes
+            : snapshot.roomId === 'csc401-algo' && (isDemoAccount(currentUser) || !currentUser)
+            ? DEMO_BOARD_STROKES
+            : []
+        );
       }
       if (typeof snapshot.activeSlideIndex === 'number') {
         setActiveSlideIndex(snapshot.activeSlideIndex);
@@ -986,29 +1476,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Array.isArray(snapshot.chat)) {
         setChatMessages(snapshot.chat);
       }
+      if (typeof snapshot.sessionStartedAt === 'number' && snapshot.sessionStartedAt > 0) {
+        setSessionStartedAt(snapshot.sessionStartedAt);
+      }
+      if (Array.isArray(snapshot.transcript)) {
+        setTranscriptLog(snapshot.transcript);
+      }
+      if (Array.isArray(snapshot.polls) && snapshot.polls.length > 0) {
+        setPolls(snapshot.polls);
+      }
+      if (Array.isArray(snapshot.questions) && snapshot.questions.length > 0) {
+        setQuestions(snapshot.questions);
+      }
       setActiveRoomInfo({
         roomId: snapshot.roomId || activeRoomCode,
         title: snapshot.title || `Room ${activeRoomCode}`,
-        courseCode: snapshot.courseCode || 'CSC 401',
+        courseCode: snapshot.courseCode || (isDemoAccount(currentUser) ? 'CSC 401' : ''),
         courseId: snapshot.courseId || null,
-        lecturerName: snapshot.lecturerName || 'Prof. Adeleke O.',
+        lecturerName:
+          snapshot.lecturerName ||
+          (isDemoAccount(currentUser) ? 'Prof. Adeleke O.' : currentUser?.role === 'lecturer' ? currentUser.name : 'Instructor'),
+        hostUserId: snapshot.hostUserId || null,
+        lecturerId: snapshot.lecturerId || null,
         isLive: Array.isArray(snapshot.participants) && snapshot.participants.length > 0,
         participantCount: Array.isArray(snapshot.participants) ? snapshot.participants.length : 1,
       });
     });
 
-    socket.on('participants_update', ({ participants: updatedList, lecturerName }) => {
+    socket.on('participants_update', ({ participants: updatedList, lecturerName, hostUserId, lecturerId }) => {
       if (Array.isArray(updatedList)) {
         setParticipants(updatedList);
+        const myId = socket.id;
+        const myUid = currentUser?.id || guestId;
+        const myPeer = updatedList.find(
+          (p: StudioParticipant) =>
+            (myId && p.socketId === myId) || (myUid && p.id === myUid)
+        );
+        if (myPeer && !myPeer.handRaised) {
+          setIsHandRaised(false);
+        }
+        setLaser((prev) => {
+          if (!prev) return null;
+          const laserOwner = updatedList.find(
+            (p: StudioParticipant) =>
+              p.id === prev.userId || p.socketId === prev.userId || p.name === prev.userName
+          );
+          if (
+            laserOwner &&
+            laserOwner.role !== 'lecturer' &&
+            !laserOwner.canDraw &&
+            !hostSettingsRef.current.useChalkboardAllowed
+          ) {
+            return null;
+          }
+          return prev;
+        });
         setActiveRoomInfo((prev) => ({
           ...prev,
           lecturerName: lecturerName || prev.lecturerName,
+          hostUserId: hostUserId !== undefined ? hostUserId : prev.hostUserId,
+          lecturerId: lecturerId !== undefined ? lecturerId : prev.lecturerId,
           isLive: updatedList.length > 0,
           participantCount: updatedList.length,
         }));
 
         // Initiate WebRTC connections to newly joined peers if we are connected
-        const myId = socket.id;
         updatedList.forEach(async (peer) => {
           if (peer.socketId && peer.socketId !== myId) {
             // Polite peer offer: the peer with greater socket ID initiates offer
@@ -1124,15 +1656,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     socket.on('host_controls_update', (incomingControls: HostControlSettings) => {
       setHostSettings((prev) => ({ ...prev, ...incomingControls }));
+      if (incomingControls.useChalkboardAllowed === false) {
+        setLaser(null);
+      }
     });
 
-    socket.on('caption_stream', ({ speaker, text }: { speaker: string; text: string }) => {
+    socket.on('caption_stream', (payload: any) => {
+      if (!payload || !payload.text) return;
+      const speaker = payload.speakerName || payload.speaker || 'Speaker';
+      const text = String(payload.text).trim();
+      if (!text) return;
       setActiveCaptions((prev) => [...prev.slice(-3), { speaker, text }]);
+      const entry: TranscriptSegment = {
+        id: payload.id || `tr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        roomId: payload.roomId || activeRoomCode,
+        speakerId: payload.speakerId || '',
+        speakerName: speaker,
+        speakerRole: payload.speakerRole === 'lecturer' ? 'lecturer' : 'student',
+        text,
+        timestamp: typeof payload.timestamp === 'number' ? payload.timestamp : Date.now(),
+        offsetMs:
+          typeof payload.offsetMs === 'number'
+            ? payload.offsetMs
+            : Math.max(0, Date.now() - sessionStartedAt),
+      };
+      setTranscriptLog((prev) => {
+        if (prev.some((item) => item.id === entry.id)) return prev;
+        return [...prev.slice(-199), entry];
+      });
     });
 
     socket.on('mute_all_peers', () => {
       if (currentUser?.role !== 'lecturer' && !isMicMuted) {
         toggleMic();
+      }
+    });
+
+    socket.on('hand_lowered', (payload: { socketId?: string; userId?: string; all?: boolean }) => {
+      if (!payload) return;
+      if (payload.all) {
+        setParticipants((prev) => prev.map((p) => ({ ...p, handRaised: false })));
+        setIsHandRaised(false);
+        return;
+      }
+      const targetSocketId = payload.socketId;
+      const targetUserId = payload.userId;
+      setParticipants((prev) =>
+        prev.map((p) =>
+          (targetSocketId && (p.socketId === targetSocketId || p.id === targetSocketId)) ||
+          (targetUserId && (p.id === targetUserId || p.socketId === targetUserId))
+            ? { ...p, handRaised: false }
+            : p
+        )
+      );
+      const mySocketId = socket.id;
+      const myUid = currentUser?.id || guestId;
+      if (
+        (targetSocketId && (targetSocketId === mySocketId || targetSocketId === myUid)) ||
+        (targetUserId && (targetUserId === myUid || targetUserId === mySocketId))
+      ) {
+        setIsHandRaised(false);
+      }
+    });
+
+    socket.on('session_ended', ({ roomId, endedBy }) => {
+      console.log(`[Chalk Studio] Session ended for room "${roomId}" by ${endedBy || 'lecturer'}`);
+      const targetRoom = roomId || activeRoomCode;
+      setActiveRoomInfo((prev) => ({
+        ...prev,
+        isLive: false,
+        participantCount: 0,
+      }));
+      setParticipants([]);
+      setStrokes([]);
+      setRedoStack([]);
+      setActiveSlideIndex(0);
+      setChatMessages([]);
+      setTranscriptLog([]);
+      setPolls([]);
+      setQuestions([]);
+      setLaser(null);
+      setLiveRooms((prev) => prev.filter((r) => r.id.toLowerCase() !== targetRoom.toLowerCase()));
+      peerConnectionsRef.current.forEach((pc) => pc.close());
+      peerConnectionsRef.current.clear();
+      setRemoteStreams(new Map());
+      setSessionEndedRoom(targetRoom);
+    });
+
+    socket.on('rooms_update', (incomingRooms: LiveRoomSummary[]) => {
+      if (Array.isArray(incomingRooms)) {
+        setLiveRooms(incomingRooms);
       }
     });
 
@@ -1146,6 +1759,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setRemoteStreams(new Map());
     };
   }, [activeRoomCode, getOrCreatePeerConnection, sendSignal]);
+
+  // Keep room membership role/identity synced if user profile or persona changes while in a room
+  useEffect(() => {
+    if (!activeRoomCode || !socketRef.current?.connected) return;
+    const matchedCourse = courses.find(
+      (c) =>
+        c.liveRoomCode.toLowerCase() === activeRoomCode.toLowerCase() ||
+        c.id.toLowerCase() === activeRoomCode.toLowerCase()
+    );
+    socketRef.current.emit('join_room', {
+      roomId: activeRoomCode,
+      title: matchedCourse?.title || `Room ${activeRoomCode}`,
+      courseCode:
+        matchedCourse?.code ||
+        (isDemoAccount(currentUser) ? 'CSC 401' : activeRoomCode.toUpperCase().slice(0, 10)),
+      courseId: matchedCourse?.id || null,
+      lecturerName:
+        matchedCourse?.lecturerName ||
+        (currentUser?.role === 'lecturer' ? currentUser.name : ''),
+      lecturerId:
+        matchedCourse?.lecturerId ||
+        (currentUser?.role === 'lecturer' ? currentUser.id : undefined),
+      userName: currentUser?.name || guestName || 'Guest Student',
+      role: currentUser?.role || 'student',
+      avatarTag:
+        currentUser?.avatarTag ||
+        (guestName ? guestName.slice(0, 2).toUpperCase() : 'GS'),
+      isMuted: isMicMuted,
+      videoMode,
+    });
+  }, [activeRoomCode, currentUser?.id, currentUser?.role, currentUser?.name]);
 
   // Audio setup & voice activity detection
   const startAudio = useCallback(async () => {
@@ -1246,25 +1890,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleHandRaised = useCallback(() => {
     const next = !isHandRaised;
     setIsHandRaised(next);
-    if (socketRef.current?.connected) {
-      socketRef.current.emit('update_status', {
-        roomId: activeRoomCode,
-        handRaised: next,
-      });
-    }
-  }, [activeRoomCode, isHandRaised]);
+    const myUid = currentUser?.id || guestId;
+    setParticipants((prev) =>
+      prev.map((p) =>
+        p.socketId === selfSocketId || (myUid && p.id === myUid)
+          ? { ...p, handRaised: next }
+          : p
+      )
+    );
+    const payload = {
+      roomId: activeRoomCode,
+      socketId: selfSocketId,
+      userId: myUid,
+      handRaised: next,
+    };
+    socketRef.current?.emit('update_status', payload);
+    try {
+      window.dispatchEvent(
+        new CustomEvent('chalk:board:tx', {
+          detail: { event: 'update_status', payload, reliable: true },
+        })
+      );
+    } catch { }
+    try {
+      boardChannelRef.current?.postMessage({ event: 'update_status', payload });
+    } catch { }
+  }, [activeRoomCode, currentUser?.id, guestId, isHandRaised, selfSocketId]);
 
   // Lower student hand (for lecturers)
   const lowerHand = useCallback(
     (socketId: string) => {
-      if (socketRef.current?.connected) {
-        socketRef.current.emit('lower_hand', {
-          roomId: activeRoomCode,
-          socketId,
-        });
+      const targetPeer = participants.find(
+        (p) => p.socketId === socketId || p.id === socketId
+      );
+      const targetUserId = targetPeer?.id || socketId;
+      setParticipants((prev) =>
+        prev.map((p) =>
+          p.socketId === socketId ||
+          p.id === socketId ||
+          (targetUserId && (p.id === targetUserId || p.socketId === targetUserId))
+            ? { ...p, handRaised: false }
+            : p
+        )
+      );
+      const myUid = currentUser?.id || guestId;
+      if (
+        socketId === selfSocketId ||
+        socketId === myUid ||
+        targetUserId === selfSocketId ||
+        targetUserId === myUid
+      ) {
+        setIsHandRaised(false);
       }
+      const payload = {
+        roomId: activeRoomCode,
+        socketId: targetPeer?.socketId || socketId,
+        userId: targetUserId,
+      };
+      socketRef.current?.emit('lower_hand', payload);
+      try {
+        window.dispatchEvent(
+          new CustomEvent('chalk:board:tx', {
+            detail: { event: 'lower_hand', payload, reliable: true },
+          })
+        );
+      } catch { }
+      try {
+        boardChannelRef.current?.postMessage({ event: 'lower_hand', payload });
+      } catch { }
     },
-    [activeRoomCode]
+    [activeRoomCode, currentUser?.id, guestId, participants, selfSocketId]
   );
 
   // Send In-call Chat Message
@@ -1406,16 +2101,316 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(interval);
   }, [networkProfile, participants.length, videoMode]);
 
+  // Multi-transport Chalkboard Broadcast Helper (Socket.io + LiveKit WebRTC DataChannel + BroadcastChannel)
+  const boardChannelRef = useRef<BroadcastChannel | null>(null);
+  const strokesRef = useRef<StrokeData[]>(strokes);
+  strokesRef.current = strokes;
+  const activeSlideIndexRef = useRef<number>(activeSlideIndex);
+  activeSlideIndexRef.current = activeSlideIndex;
+  const totalSlidesRef = useRef<number>(totalSlides);
+  totalSlidesRef.current = totalSlides;
+  const stageLayoutRef = useRef(stageLayout);
+  stageLayoutRef.current = stageLayout;
+  const hostSettingsRef = useRef(hostSettings);
+  hostSettingsRef.current = hostSettings;
+
+  const emitChalkboardPacket = useCallback(
+    (event: string, payload: any, reliable = true) => {
+      socketRef.current?.emit(event, payload);
+      try {
+        window.dispatchEvent(
+          new CustomEvent('chalk:board:tx', {
+            detail: { event, payload, reliable },
+          })
+        );
+      } catch {
+        // ignore
+      }
+      try {
+        boardChannelRef.current?.postMessage({ event, payload });
+      } catch {
+        // ignore
+      }
+    },
+    []
+  );
+
+  // Listen to LiveKit DataChannel & BroadcastChannel chalkboard events
+  useEffect(() => {
+    if (!activeRoomCode) return;
+
+    const handleIncomingBoardEvent = (event: string, payload: any) => {
+      if (!payload) return;
+      switch (event) {
+        case 'stroke_delta': {
+          const stroke = payload as StrokeData;
+          if (!stroke || !stroke.id) return;
+          setStrokes((prev) => {
+            const filtered = prev.filter((s) => s.id !== stroke.id);
+            return [...filtered, stroke];
+          });
+          break;
+        }
+        case 'remove_stroke':
+        case 'stroke_removed': {
+          const strokeId = payload.strokeId;
+          if (strokeId) {
+            setStrokes((prev) => prev.filter((s) => s.id !== strokeId));
+          }
+          break;
+        }
+        case 'clear_canvas': {
+          setStrokes([]);
+          setRedoStack([]);
+          break;
+        }
+        case 'change_slide': {
+          if (typeof payload.slideIndex === 'number') {
+            setActiveSlideIndex(payload.slideIndex);
+          }
+          if (typeof payload.totalSlides === 'number') {
+            setTotalSlides(payload.totalSlides);
+          }
+          break;
+        }
+        case 'laser_pointer': {
+          const incomingLaser = payload as LaserPointer;
+          setLaser(incomingLaser.active ? incomingLaser : null);
+          break;
+        }
+        case 'change_stage_layout':
+        case 'stage_layout_changed': {
+          if (payload.stageLayout) {
+            setStageLayout(payload.stageLayout);
+          }
+          break;
+        }
+        case 'grant_permission': {
+          setParticipants((prev) =>
+            prev.map((p) =>
+              p.socketId === payload.socketId ||
+              (payload.userId && p.id === payload.userId)
+                ? {
+                    ...p,
+                    ...(typeof payload.canDraw === 'boolean'
+                      ? { canDraw: payload.canDraw }
+                      : {}),
+                    ...(typeof payload.canSpeak === 'boolean'
+                      ? { canSpeak: payload.canSpeak }
+                      : {}),
+                  }
+                : p
+            )
+          );
+          if (payload.canDraw === false) {
+            setLaser(null);
+          }
+          break;
+        }
+        case 'update_status': {
+          if (typeof payload.handRaised === 'boolean') {
+            setParticipants((prev) =>
+              prev.map((p) =>
+                (payload.socketId && (p.socketId === payload.socketId || p.id === payload.socketId)) ||
+                (payload.userId && (p.id === payload.userId || p.socketId === payload.userId))
+                  ? { ...p, handRaised: payload.handRaised }
+                  : p
+              )
+            );
+          }
+          break;
+        }
+        case 'lower_hand':
+        case 'hand_lowered': {
+          if (payload.all) {
+            setParticipants((prev) => prev.map((p) => ({ ...p, handRaised: false })));
+            setIsHandRaised(false);
+          } else {
+            const targetSocketId = payload.socketId;
+            const targetUserId = payload.userId;
+            setParticipants((prev) =>
+              prev.map((p) =>
+                (targetSocketId && (p.socketId === targetSocketId || p.id === targetSocketId)) ||
+                (targetUserId && (p.id === targetUserId || p.socketId === targetUserId))
+                  ? { ...p, handRaised: false }
+                  : p
+              )
+            );
+            const myUid = currentUser?.id || guestId;
+            if (
+              (targetSocketId && (targetSocketId === selfSocketId || targetSocketId === myUid)) ||
+              (targetUserId && (targetUserId === myUid || targetUserId === selfSocketId))
+            ) {
+              setIsHandRaised(false);
+            }
+          }
+          break;
+        }
+        case 'lower_all_hands': {
+          setParticipants((prev) => prev.map((p) => ({ ...p, handRaised: false })));
+          setIsHandRaised(false);
+          break;
+        }
+        case 'update_host_controls':
+        case 'host_controls_update': {
+          setHostSettings((prev) => ({ ...prev, ...payload }));
+          if (payload.useChalkboardAllowed === false) {
+            setLaser(null);
+          }
+          break;
+        }
+        case 'caption_stream': {
+          if (payload?.text) {
+            const speaker = payload.speakerName || payload.speaker || 'Speaker';
+            const text = String(payload.text).trim();
+            if (text) {
+              setActiveCaptions((prev) => [...prev.slice(-3), { speaker, text }]);
+              const entry: TranscriptSegment = {
+                id: payload.id || `tr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                roomId: payload.roomId || activeRoomCode,
+                speakerId: payload.speakerId || '',
+                speakerName: speaker,
+                speakerRole: payload.speakerRole === 'lecturer' ? 'lecturer' : 'student',
+                text,
+                timestamp: typeof payload.timestamp === 'number' ? payload.timestamp : Date.now(),
+                offsetMs:
+                  typeof payload.offsetMs === 'number'
+                    ? payload.offsetMs
+                    : Math.max(0, Date.now() - sessionStartedAt),
+              };
+              setTranscriptLog((prev) => {
+                if (prev.some((item) => item.id === entry.id)) return prev;
+                return [...prev.slice(-199), entry];
+              });
+            }
+          }
+          break;
+        }
+        case 'board_snapshot': {
+          if (Array.isArray(payload.strokes)) {
+            setStrokes(payload.strokes);
+          }
+          if (typeof payload.activeSlideIndex === 'number') {
+            setActiveSlideIndex(payload.activeSlideIndex);
+          }
+          if (typeof payload.totalSlides === 'number') {
+            setTotalSlides(payload.totalSlides);
+          }
+          if (payload.stageLayout) {
+            setStageLayout(payload.stageLayout);
+          }
+          if (payload.hostSettings) {
+            setHostSettings((prev) => ({ ...prev, ...payload.hostSettings }));
+          }
+          break;
+        }
+        case 'request_board_snapshot': {
+          const isHost = currentUser?.role === 'lecturer';
+          const isHostOrHasBoard = isHost || strokesRef.current.length > 0;
+          if (isHostOrHasBoard) {
+            const snapPayload = {
+              roomId: activeRoomCode,
+              strokes: strokesRef.current,
+              activeSlideIndex: activeSlideIndexRef.current,
+              totalSlides: totalSlidesRef.current,
+              ...(isHost ? { stageLayout: stageLayoutRef.current } : {}),
+              hostSettings: hostSettingsRef.current,
+            };
+            try {
+              window.dispatchEvent(
+                new CustomEvent('chalk:board:tx', {
+                  detail: {
+                    event: 'board_snapshot',
+                    payload: snapPayload,
+                    reliable: true,
+                  },
+                })
+              );
+            } catch { }
+            try {
+              boardChannelRef.current?.postMessage({
+                event: 'board_snapshot',
+                payload: snapPayload,
+              });
+            } catch { }
+          }
+          break;
+        }
+      }
+    };
+
+    const onWindowRx = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.event) {
+        handleIncomingBoardEvent(detail.event, detail.payload);
+      }
+    };
+    window.addEventListener('chalk:board:rx', onWindowRx);
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        bc = new BroadcastChannel(`chalk_room_${activeRoomCode.toLowerCase()}`);
+        boardChannelRef.current = bc;
+        bc.onmessage = (ev) => {
+          if (ev.data?.event) {
+            handleIncomingBoardEvent(ev.data.event, ev.data.payload);
+          }
+        };
+        bc.postMessage({
+          event: 'request_board_snapshot',
+          payload: { roomId: activeRoomCode },
+        });
+      } catch {
+        // ignore if BroadcastChannel unsupported
+      }
+    }
+
+    return () => {
+      window.removeEventListener('chalk:board:rx', onWindowRx);
+      if (bc) {
+        bc.close();
+        boardChannelRef.current = null;
+      }
+    };
+  }, [activeRoomCode, currentUser?.role]);
+
   // Stroke operations
+  const streamStroke = useCallback(
+    (stroke: StrokeData) => {
+      const targetRoom = activeRoomCode || stroke.roomId;
+      if (!targetRoom) return;
+      const tagged: StrokeData = {
+        ...stroke,
+        roomId: targetRoom,
+        userId: currentUser?.id || stroke.userId || guestId,
+        userName: currentUser?.name || guestName || stroke.userName || 'Participant',
+        slideIndex: activeSlideIndex,
+        isComplete: false,
+      };
+      emitChalkboardPacket('stroke_delta', tagged, false);
+    },
+    [activeRoomCode, activeSlideIndex, currentUser?.id, currentUser?.name, emitChalkboardPacket, guestId, guestName]
+  );
+
   const commitStroke = (stroke: StrokeData) => {
-    const tagged = { ...stroke, slideIndex: activeSlideIndex };
+    const targetRoom = activeRoomCode || stroke.roomId;
+    const tagged: StrokeData = {
+      ...stroke,
+      roomId: targetRoom,
+      userId: currentUser?.id || stroke.userId || guestId,
+      userName: currentUser?.name || guestName || stroke.userName || 'Participant',
+      slideIndex: activeSlideIndex,
+      isComplete: true,
+    };
     setStrokes((prev) => {
-      const updated = [...prev, tagged];
-      persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
+      const filtered = prev.filter((s) => s.id !== tagged.id);
+      const updated = [...filtered, tagged];
+      persistRoomStateToFirestore(targetRoom, { strokes: updated }).catch(() => { });
       return updated;
     });
     setRedoStack([]);
-    socketRef.current?.emit('stroke_delta', tagged);
+    emitChalkboardPacket('stroke_delta', tagged, true);
   };
 
   const undoStroke = () => {
@@ -1425,11 +2420,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setRedoStack((r) => [last, ...r]);
       const updated = prev.slice(0, -1);
       persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
-      if (socketRef.current?.connected && last.id) {
-        socketRef.current.emit('remove_stroke', {
-          roomId: activeRoomCode,
-          strokeId: last.id,
-        });
+      if (last.id) {
+        emitChalkboardPacket(
+          'remove_stroke',
+          {
+            roomId: activeRoomCode,
+            strokeId: last.id,
+          },
+          true
+        );
       }
       return updated;
     });
@@ -1439,10 +2438,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRedoStack((prev) => {
       if (prev.length === 0) return prev;
       const [next, ...rest] = prev;
+      const tagged = { ...next, roomId: activeRoomCode || next.roomId, isComplete: true };
       setStrokes((s) => {
-        const updated = [...s, next];
+        const filtered = s.filter((st) => st.id !== tagged.id);
+        const updated = [...filtered, tagged];
         persistRoomStateToFirestore(activeRoomCode, { strokes: updated }).catch(() => { });
-        socketRef.current?.emit('stroke_delta', next);
+        emitChalkboardPacket('stroke_delta', tagged, true);
         return updated;
       });
       return rest;
@@ -1453,10 +2454,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStrokes([]);
     setRedoStack([]);
     persistRoomStateToFirestore(activeRoomCode, { strokes: [] }).catch(() => { });
-    socketRef.current?.emit('clear_canvas', {
-      roomId: activeRoomCode,
-      userId: currentUser?.id || 'usr_guest',
-    });
+    emitChalkboardPacket(
+      'clear_canvas',
+      {
+        roomId: activeRoomCode,
+        userId: currentUser?.id || 'usr_guest',
+      },
+      true
+    );
   };
 
   const nextSlide = () => {
@@ -1464,10 +2469,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (next < totalSlides) {
       setActiveSlideIndex(next);
       persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => { });
-      socketRef.current?.emit('change_slide', {
-        roomId: activeRoomCode,
-        slideIndex: next,
-      });
+      emitChalkboardPacket(
+        'change_slide',
+        {
+          roomId: activeRoomCode,
+          slideIndex: next,
+          totalSlides,
+        },
+        true
+      );
     }
   };
 
@@ -1475,65 +2485,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const next = Math.max(0, activeSlideIndex - 1);
     setActiveSlideIndex(next);
     persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: next }).catch(() => { });
-    socketRef.current?.emit('change_slide', {
-      roomId: activeRoomCode,
-      slideIndex: next,
-    });
+    emitChalkboardPacket(
+      'change_slide',
+      {
+        roomId: activeRoomCode,
+        slideIndex: next,
+        totalSlides,
+      },
+      true
+    );
   };
 
   const goToSlide = (index: number) => {
     if (index >= 0 && index < totalSlides) {
       setActiveSlideIndex(index);
       persistRoomStateToFirestore(activeRoomCode, { activeSlideIndex: index }).catch(() => { });
-      socketRef.current?.emit('change_slide', {
-        roomId: activeRoomCode,
-        slideIndex: index,
-      });
+      emitChalkboardPacket(
+        'change_slide',
+        {
+          roomId: activeRoomCode,
+          slideIndex: index,
+          totalSlides,
+        },
+        true
+      );
     }
   };
 
   const addSlide = useCallback(() => {
     const next = totalSlides;
-    setTotalSlides((prev) => prev + 1);
+    const nextTotal = totalSlides + 1;
+    setTotalSlides(nextTotal);
     setActiveSlideIndex(next);
     persistRoomStateToFirestore(activeRoomCode, {
       activeSlideIndex: next,
     }).catch(() => { });
-    socketRef.current?.emit('change_slide', {
-      roomId: activeRoomCode,
-      slideIndex: next,
-      totalSlides: totalSlides + 1,
-    });
-  }, [activeRoomCode, totalSlides]);
+    emitChalkboardPacket(
+      'change_slide',
+      {
+        roomId: activeRoomCode,
+        slideIndex: next,
+        totalSlides: nextTotal,
+      },
+      true
+    );
+  }, [activeRoomCode, emitChalkboardPacket, totalSlides]);
 
   const grantParticipantPermission = useCallback(
     (socketId: string, permissions: { canDraw?: boolean; canSpeak?: boolean }) => {
-      setParticipants((prev) =>
-        prev.map((p) => (p.socketId === socketId ? { ...p, ...permissions } : p))
+      const targetPeer = participants.find(
+        (p) => p.socketId === socketId || p.id === socketId
       );
-      if (socketRef.current?.connected) {
-        socketRef.current.emit('grant_permission', {
+      setParticipants((prev) =>
+        prev.map((p) =>
+          p.socketId === socketId || p.id === socketId ? { ...p, ...permissions } : p
+        )
+      );
+      if (permissions.canDraw === false) {
+        setLaser(null);
+        emitChalkboardPacket(
+          'laser_pointer',
+          {
+            roomId: activeRoomCode,
+            userId: targetPeer?.id || socketId,
+            userName: targetPeer?.name || 'Student',
+            x: 0,
+            y: 0,
+            active: false,
+          },
+          true
+        );
+      }
+      emitChalkboardPacket(
+        'grant_permission',
+        {
           roomId: activeRoomCode,
           socketId,
+          userId: targetPeer?.id || socketId,
           ...permissions,
-        });
-      }
+        },
+        true
+      );
     },
-    [activeRoomCode]
+    [activeRoomCode, emitChalkboardPacket, participants]
   );
 
   const broadcastStageLayout = useCallback(
     (layout: 'whiteboard' | 'tiled' | 'spotlight' | 'sidebar', roomId?: string) => {
       setStageLayout(layout);
       const targetRoom = roomId || activeRoomCode;
-      if (socketRef.current?.connected && targetRoom) {
-        socketRef.current.emit('change_stage_layout', {
-          roomId: targetRoom,
-          stageLayout: layout,
-        });
+      if (targetRoom) {
+        emitChalkboardPacket(
+          'change_stage_layout',
+          {
+            roomId: targetRoom,
+            stageLayout: layout,
+          },
+          true
+        );
       }
     },
-    [activeRoomCode]
+    [activeRoomCode, emitChalkboardPacket]
   );
 
   const emitLaser = (x: number, y: number, active: boolean) => {
@@ -1546,18 +2598,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active,
     };
     setLaser(active ? pointer : null);
-    socketRef.current?.emit('laser_pointer', pointer);
+    emitChalkboardPacket('laser_pointer', pointer, !active);
   };
 
   // Course management helpers
   const joinCourseByCode = async (code: string): Promise<CourseModel | null> => {
-    const normalized = code.trim().toLowerCase();
+    const rawTrimmed = code.trim();
+    if (!rawTrimmed) return null;
+    const normalized = rawTrimmed.toLowerCase().replace(/[^a-z0-9]/g, '');
     const studentMember = currentUser
       ? {
         id: currentUser.id,
         name: currentUser.name,
         avatarTag: currentUser.avatarTag,
-        role: currentUser.role,
+        role: 'student' as const,
         matricOrStaffId: currentUser.matricOrStaffId,
       }
       : {
@@ -1568,63 +2622,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         matricOrStaffId: 'GUEST/STUDENT',
       };
 
-    const existing = courses.find(
-      (c) =>
-        c.id.toLowerCase() === normalized ||
-        c.code.toLowerCase().replace(/\s+/g, '') === normalized.replace(/\s+/g, '') ||
-        c.liveRoomCode.toLowerCase() === normalized
-    );
+    const enrichCourseWithStudent = (target: CourseModel): CourseModel => {
+      const currentMembers = target.members || [];
+      const studentIdLower = studentMember.id.toLowerCase();
+      const alreadyMember = currentMembers.some(
+        (m) => (m.id || '').toLowerCase() === studentIdLower && m.role === 'student'
+      );
+      const currentMemberIds = target.memberIds || [];
+      const alreadyInIds = currentMemberIds.some(
+        (id) => id.toLowerCase() === studentIdLower
+      );
+      const updatedMembers = alreadyMember
+        ? currentMembers
+        : [...currentMembers, studentMember];
+      const updatedMemberIds = alreadyInIds
+        ? currentMemberIds
+        : [...currentMemberIds, studentMember.id];
+      const studentCount = updatedMembers.filter((m) => m.role === 'student').length;
+      return {
+        ...target,
+        members: updatedMembers,
+        memberIds: updatedMemberIds,
+        enrolledCount: Math.max(target.enrolledCount || 0, updatedMemberIds.length, studentCount),
+      };
+    };
+
+    if (!isDemoMode) {
+      const res = await syncWithBackendApi('/api/courses/join', 'POST', {
+        code: rawTrimmed,
+        studentId: studentMember.id,
+        studentName: studentMember.name,
+        avatarTag: studentMember.avatarTag,
+        matricOrStaffId: studentMember.matricOrStaffId,
+        role: 'student',
+      });
+      if (res?.course) {
+        const joinedCourse = enrichCourseWithStudent(res.course as CourseModel);
+        setCourses((prev) => [
+          joinedCourse,
+          ...prev.filter((c) => c.id !== joinedCourse.id),
+        ]);
+        saveCourseToFirestore(joinedCourse).catch(() => { });
+        return joinedCourse;
+      }
+    }
+
+    const existing =
+      courses.find(
+        (c) =>
+          !c.isArchived &&
+          (c.id.toLowerCase() === rawTrimmed.toLowerCase() ||
+            c.liveRoomCode.toLowerCase() === rawTrimmed.toLowerCase())
+      ) ||
+      courses.find(
+        (c) =>
+          !c.isArchived &&
+          c.code.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
+      );
 
     if (existing) {
+      const updatedCourse = enrichCourseWithStudent(existing);
       setCourses((prev) =>
-        prev.map((c) => {
-          if (c.id === existing.id) {
-            const currentMembers = c.members || [];
-            const alreadyMember = currentMembers.some((m) => m.id === studentMember.id);
-            if (!alreadyMember) {
-              const updatedMembers = [...currentMembers, studentMember];
-              const currentMemberIds = c.memberIds || [];
-              const updatedMemberIds = currentMemberIds.includes(studentMember.id)
-                ? currentMemberIds
-                : [...currentMemberIds, studentMember.id];
-              return {
-                ...c,
-                members: updatedMembers,
-                memberIds: updatedMemberIds,
-                enrolledCount: Math.max(c.enrolledCount + 1, updatedMembers.length),
-              };
-            }
-          }
-          return c;
-        })
+        prev.map((c) => (c.id === existing.id ? updatedCourse : c))
       );
-      syncWithBackendApi('/api/courses/join', 'POST', { code });
-      return existing;
+      if (!isDemoMode) {
+        saveCourseToFirestore(updatedCourse).catch(() => { });
+        syncWithBackendApi(`/api/courses/${updatedCourse.id}/settings`, 'PATCH', {
+          memberIds: updatedCourse.memberIds,
+          members: updatedCourse.members,
+          enrolledCount: updatedCourse.enrolledCount,
+        }).catch(() => { });
+      }
+      return updatedCourse;
     }
 
-    const res = await syncWithBackendApi('/api/courses/join', 'POST', { code });
-    if (res?.course) {
-      setCourses((prev) => [res.course, ...prev.filter((c) => c.id !== res.course.id)]);
-      return res.course;
-    }
-
-    const fallback: CourseModel = {
-      id: normalized.replace(/[^a-z0-9]/g, '') || `course_${Date.now()}`,
-      code: code.toUpperCase().slice(0, 8),
-      title: `Joined Cohort (${code.toUpperCase()})`,
-      lecturerName: 'Course Lecturer',
-      lecturerId: 'usr_lecturer_custom',
-      accentHex: '#059669',
-      hasLiveSession: true,
-      liveRoomCode: normalized,
-      enrolledCount: 1,
-      scheduleTime: 'Live Session Ready',
-      department: currentUser?.department || 'Computer Science & Engineering',
-      members: [studentMember],
-    };
-    setCourses((prev) => [fallback, ...prev]);
-    saveCourseToFirestore(fallback).catch(() => { });
-    return fallback;
+    return null;
   };
 
   const createCourse = async ({
@@ -1632,48 +2704,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     title,
     scheduleTime,
     department,
+    section,
+    room,
+    subject,
   }: {
     code: string;
     title: string;
     scheduleTime: string;
     department: string;
+    section?: string;
+    room?: string;
+    subject?: string;
   }): Promise<CourseModel> => {
     const slug = code.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const generatedId = `${slug || 'course'}-${Math.random().toString(36).slice(2, 6)}`;
+    const generatedRoomCode = `${slug || 'room'}-${Math.random().toString(36).slice(2, 8)}`;
     const lecturerMember = {
       id: currentUser?.id || 'usr_lecturer_01',
-      name: currentUser?.name || 'Prof. Lecturer',
-      avatarTag: currentUser?.avatarTag || 'PL',
+      name: currentUser?.name || 'Lecturer',
+      avatarTag: currentUser?.avatarTag || 'LC',
       role: 'lecturer' as const,
-      matricOrStaffId: currentUser?.matricOrStaffId || 'STAFF/CS/2026',
+      matricOrStaffId: currentUser?.matricOrStaffId || '',
     };
 
-    const res = await syncWithBackendApi('/api/courses', 'POST', {
-      code,
-      title,
-      scheduleTime,
-      department,
-    });
-    if (res?.course) {
-      setCourses((prev) => [res.course, ...prev]);
-      return res.course;
-    }
-
     const newCourse: CourseModel = {
-      id: slug || `course_${Date.now()}`,
+      id: generatedId,
       code: code.toUpperCase(),
       title,
-      lecturerName: currentUser?.name || 'Prof. Lecturer',
+      lecturerName: currentUser?.name || 'Lecturer',
       lecturerId: currentUser?.id || 'usr_lecturer_01',
       accentHex: '#059669',
       hasLiveSession: true,
-      liveRoomCode: `${slug || 'room'}-live`,
-      enrolledCount: 1,
-      scheduleTime: scheduleTime || 'Mon & Wed • 9:00 AM WAT',
-      department: department || 'Computer Science & Engineering',
+      liveRoomCode: generatedRoomCode,
+      enrolledCount: 0,
+      memberIds: [],
+      scheduleTime: scheduleTime || 'Schedule TBA',
+      department: department || currentUser?.department || 'General',
+      ...(section ? { section } : {}),
+      ...(room ? { room } : {}),
+      ...(subject ? { subject } : {}),
       members: [lecturerMember],
     };
-    setCourses((prev) => [newCourse, ...prev]);
-    saveCourseToFirestore(newCourse).catch(() => { });
+
+    if (!isDemoMode) {
+      const res = await syncWithBackendApi('/api/courses', 'POST', {
+        ...newCourse,
+        role: 'lecturer',
+      });
+      if (res?.course) {
+        const enriched: CourseModel = {
+          ...newCourse,
+          ...res.course,
+          lecturerId: currentUser?.id || res.course.lecturerId || newCourse.lecturerId,
+          lecturerName: currentUser?.name || res.course.lecturerName || newCourse.lecturerName,
+          members:
+            Array.isArray(res.course.members) && res.course.members.length > 0
+              ? res.course.members
+              : [lecturerMember],
+          ...(section ? { section } : {}),
+          ...(room ? { room } : {}),
+          ...(subject ? { subject } : {}),
+        };
+        setCourses((prev) => [
+          enriched,
+          ...prev.filter((c) => c.id !== enriched.id),
+        ]);
+        saveCourseToFirestore(enriched).catch(() => { });
+        return enriched;
+      }
+    }
+
+    setCourses((prev) => [newCourse, ...prev.filter((c) => c.id !== newCourse.id)]);
+    if (!isDemoMode) {
+      saveCourseToFirestore(newCourse).catch(() => { });
+    }
     return newCourse;
   };
 
@@ -1695,13 +2799,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       commentsCount: 0,
     };
     setAnnouncements((prev) => [newAnn, ...prev]);
-    saveAnnouncementToFirestore(newAnn).catch(() => { });
-    syncWithBackendApi('/api/announcements', 'POST', {
-      courseId,
-      content,
-      isLiveNotice,
-      attachments,
-    });
+    if (!isDemoMode) {
+      saveAnnouncementToFirestore(newAnn).catch(() => { });
+      syncWithBackendApi('/api/announcements', 'POST', {
+        courseId,
+        content,
+        isLiveNotice,
+        attachments,
+      });
+    }
   };
 
   const deleteAnnouncement = async (announcementId: string) => {
@@ -1830,12 +2936,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     );
 
-    saveAssignmentSubmissionToFirestore(assignmentId, note || '', currentUser?.id).catch(() => { });
-    syncWithBackendApi(`/api/assignments/${assignmentId}/submit`, 'POST', {
-      attachments,
-      answerText,
-      note,
-    });
+    if (!isDemoMode) {
+      saveAssignmentSubmissionToFirestore(assignmentId, note || '', currentUser?.id).catch(() => { });
+      syncWithBackendApi(`/api/assignments/${assignmentId}/submit`, 'POST', {
+        attachments,
+        answerText,
+        note,
+      });
+    }
   };
 
   const unsubmitWork = async (assignmentId: string) => {
@@ -1952,8 +3060,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       questionOptions,
     };
     setAssignments((prev) => [newAsg, ...prev]);
-    saveAssignmentSubmissionToFirestore(newAsg.id, '', currentUser?.id).catch(() => { });
-    syncWithBackendApi('/api/assignments', 'POST', newAsg);
+    if (!isDemoMode) {
+      saveAssignmentSubmissionToFirestore(newAsg.id, '', currentUser?.id).catch(() => { });
+      syncWithBackendApi('/api/assignments', 'POST', newAsg);
+    }
     return newAsg;
   };
 
@@ -1964,10 +3074,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCourseSettings = async (courseId: string, updates: Partial<CourseModel>) => {
+    let updatedDoc: CourseModel | null = null;
     setCourses((prev) =>
-      prev.map((c) => (c.id === courseId ? { ...c, ...updates } : c))
+      prev.map((c) => {
+        if (c.id === courseId) {
+          updatedDoc = { ...c, ...updates };
+          return updatedDoc;
+        }
+        return c;
+      })
     );
-    syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', updates);
+    if (!isDemoMode) {
+      if (updatedDoc) {
+        saveCourseToFirestore(updatedDoc).catch(() => { });
+      }
+      syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', updates);
+    }
   };
 
   const archiveCourse = async (courseId: string) => {
@@ -1979,44 +3101,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteCoursePermanently = async (courseId: string) => {
-    setCourses((prev) => prev.filter((c) => c.id !== courseId));
-    setAssignments((prev) => prev.filter((a) => a.courseId !== courseId));
-    setAnnouncements((prev) => prev.filter((a) => a.courseId !== courseId));
-    setTopics((prev) => prev.filter((t) => t.courseId !== courseId));
-    syncWithBackendApi(`/api/courses/${courseId}`, 'DELETE');
+    const idLower = courseId.toLowerCase();
+    deletedCourseIdsRef.current.add(idLower);
+    persistDeletedCourseIds();
+
+    const targetCourse = courses.find((c) => c.id.toLowerCase() === idLower);
+    if (
+      targetCourse &&
+      activeRoomCode &&
+      activeRoomCode.toLowerCase() === targetCourse.liveRoomCode.toLowerCase()
+    ) {
+      setActiveRoomCodeState('');
+    }
+
+    setCourses((prev) => prev.filter((c) => c.id.toLowerCase() !== idLower));
+    setAssignments((prev) => prev.filter((a) => a.courseId.toLowerCase() !== idLower));
+    setAnnouncements((prev) => prev.filter((a) => a.courseId.toLowerCase() !== idLower));
+    setTopics((prev) => prev.filter((t) => t.courseId.toLowerCase() !== idLower));
+    setSubmissions((prev) => prev.filter((s) => s.courseId.toLowerCase() !== idLower));
+    if (!isDemoMode) {
+      await Promise.all([
+        deleteCourseFromFirestore(courseId).catch(() => { }),
+        syncWithBackendApi(`/api/courses/${courseId}`, 'DELETE'),
+      ]);
+    }
   };
 
   const muteStudent = async (courseId: string, studentId: string, isMuted: boolean) => {
+    let updatedDoc: CourseModel | null = null;
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id === courseId && c.members) {
-          return {
+          updatedDoc = {
             ...c,
             members: c.members.map((m) =>
               m.id === studentId ? { ...m, isMuted } : m
             ),
           };
+          return updatedDoc;
         }
         return c;
       })
     );
+    if (!isDemoMode && updatedDoc) {
+      const docToSave = updatedDoc as CourseModel;
+      saveCourseToFirestore(docToSave).catch(() => { });
+      syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', {
+        members: docToSave.members,
+      });
+    }
   };
 
   const removeStudentFromCourse = async (courseId: string, studentId: string) => {
+    let updatedDoc: CourseModel | null = null;
+    const studentIdLower = studentId.toLowerCase();
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id === courseId && c.members) {
-          const updated = c.members.filter((m) => m.id !== studentId);
-          return {
+          const updated = c.members.filter(
+            (m) => (m.id || '').toLowerCase() !== studentIdLower
+          );
+          const updatedIds = (c.memberIds || []).filter(
+            (id) => id.toLowerCase() !== studentIdLower
+          );
+          const studentCount = updated.filter((m) => m.role === 'student').length;
+          updatedDoc = {
             ...c,
             members: updated,
-            memberIds: (c.memberIds || []).filter((id) => id !== studentId),
-            enrolledCount: Math.max(0, updated.length),
+            memberIds: updatedIds,
+            enrolledCount: Math.max(0, studentCount),
           };
+          return updatedDoc;
         }
         return c;
       })
     );
+    if (!isDemoMode && updatedDoc) {
+      const docToSave = updatedDoc as CourseModel;
+      saveCourseToFirestore(docToSave).catch(() => { });
+      syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', {
+        members: docToSave.members,
+        memberIds: docToSave.memberIds,
+        enrolledCount: docToSave.enrolledCount,
+      });
+    }
   };
 
   const inviteStudentToCourse = async (courseId: string, emailOrName: string) => {
@@ -2029,20 +3197,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role: 'student' as const,
       matricOrStaffId: `INV/${Date.now().toString().slice(-4)}`,
     };
+    let updatedDoc: CourseModel | null = null;
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id === courseId) {
           const members = [...(c.members || []), newMember];
-          return {
+          const memberIds = [...(c.memberIds || []), fakeId];
+          const studentCount = members.filter((m) => m.role === 'student').length;
+          updatedDoc = {
             ...c,
             members,
-            memberIds: [...(c.memberIds || []), fakeId],
-            enrolledCount: members.length,
+            memberIds,
+            enrolledCount: Math.max(memberIds.length, studentCount),
           };
+          return updatedDoc;
         }
         return c;
       })
     );
+    if (!isDemoMode && updatedDoc) {
+      const docToSave = updatedDoc as CourseModel;
+      saveCourseToFirestore(docToSave).catch(() => { });
+      syncWithBackendApi(`/api/courses/${courseId}/settings`, 'PATCH', {
+        members: docToSave.members,
+        memberIds: docToSave.memberIds,
+        enrolledCount: docToSave.enrolledCount,
+      });
+    }
   };
 
   // Google Studio features
@@ -2063,6 +3244,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleCaptions = () => {
     setIsCaptionsOn((prev) => !prev);
   };
+
+  // Continuous Web Speech API live transcription when in a Studio room (mic unmuted or captions active)
+  useEffect(() => {
+    if (!activeRoomCode || (isMicMuted && !isCaptionsOn)) return;
+    if (typeof window === 'undefined') return;
+    const SpeechRec =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) return;
+
+    let stopped = false;
+    let recognition: any = null;
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const startRecognition = () => {
+      if (stopped) return;
+      try {
+        recognition = new SpeechRec();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event: any) => {
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const res = event.results[i];
+            if (res.isFinal && res[0]?.transcript) {
+              const spokenText = String(res[0].transcript).trim();
+              if (!spokenText) continue;
+              const now = Date.now();
+              const speakerName = currentUser?.name || guestName || 'Speaker';
+              const speakerRole: 'lecturer' | 'student' =
+                currentUser?.role === 'lecturer' ? 'lecturer' : 'student';
+              const entry: TranscriptSegment = {
+                id: `tr_${now}_${Math.random().toString(36).slice(2, 6)}`,
+                roomId: activeRoomCode,
+                speakerId: currentUser?.id || guestId,
+                speakerName,
+                speakerRole,
+                text: spokenText,
+                timestamp: now,
+                offsetMs: Math.max(0, now - sessionStartedAt),
+              };
+              setActiveCaptions((prev) => [...prev.slice(-3), { speaker: speakerName, text: spokenText }]);
+              setTranscriptLog((prev) => {
+                if (prev.some((item) => item.id === entry.id)) return prev;
+                return [...prev.slice(-199), entry];
+              });
+              emitChalkboardPacket(
+                'caption_stream',
+                {
+                  ...entry,
+                  speaker: speakerName,
+                },
+                true
+              );
+            }
+          }
+        };
+
+        recognition.onend = () => {
+          if (!stopped) {
+            restartTimer = setTimeout(() => startRecognition(), 400);
+          }
+        };
+
+        recognition.onerror = () => {
+          // Gracefully ignore permission/no-speech errors
+        };
+
+        recognition.start();
+      } catch {
+        // Ignore if already started or unsupported
+      }
+    };
+
+    startRecognition();
+
+    return () => {
+      stopped = true;
+      if (restartTimer) clearTimeout(restartTimer);
+      try {
+        recognition?.stop?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [
+    activeRoomCode,
+    currentUser?.id,
+    currentUser?.name,
+    currentUser?.role,
+    emitChalkboardPacket,
+    guestId,
+    guestName,
+    isCaptionsOn,
+    isMicMuted,
+    sessionStartedAt,
+  ]);
 
   const createPoll = (question: string, options: string[], showResults: boolean) => {
     const newPoll: StudioPoll = {
@@ -2201,9 +3479,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateHostSettings = (settings: Partial<HostControlSettings>) => {
+    if (settings.useChalkboardAllowed === false) {
+      setLaser(null);
+      emitChalkboardPacket(
+        'laser_pointer',
+        {
+          roomId: activeRoomCode,
+          userId: currentUser?.id || 'host',
+          userName: currentUser?.name || 'Host',
+          x: 0,
+          y: 0,
+          active: false,
+        },
+        true
+      );
+    }
     setHostSettings((prev) => {
       const updated = { ...prev, ...settings };
-      socketRef.current?.emit('update_host_controls', updated);
+      emitChalkboardPacket('update_host_controls', updated, true);
       return updated;
     });
   };
@@ -2214,18 +3507,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const lowerAllHands = () => {
     setParticipants((prev) => prev.map((p) => ({ ...p, handRaised: false })));
-    socketRef.current?.emit('lower_all_hands');
+    setIsHandRaised(false);
+    emitChalkboardPacket('lower_all_hands', { roomId: activeRoomCode, all: true }, true);
   };
+
+  const endStudioSession = useCallback(async (targetRoomId?: string) => {
+    const rId = targetRoomId || activeRoomCode;
+    if (!rId) return;
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+      setLocalStream(null);
+    }
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('end_session', { roomId: rId });
+    }
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const idToken = await getCurrentFirebaseIdToken();
+      if (idToken) headers.Authorization = `Bearer ${idToken}`;
+      await fetch(`${BACKEND_API_BASE}/api/rooms/${encodeURIComponent(rId)}/end`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ roomId: rId, endedBy: currentUser?.name || 'Lecturer' }),
+      });
+    } catch (err) {
+      console.warn('[Chalk Studio] Failed to call POST /api/rooms/:id/end:', err);
+    }
+
+    setActiveRoomInfo((prev) => ({
+      ...prev,
+      isLive: false,
+      participantCount: 0,
+    }));
+    setStrokes([]);
+    setRedoStack([]);
+    setActiveSlideIndex(0);
+    setChatMessages([]);
+    setTranscriptLog([]);
+    setPolls([]);
+    setQuestions([]);
+    setLaser(null);
+    setLiveRooms((prev) => prev.filter((r) => r.id.toLowerCase() !== rId.toLowerCase()));
+    setSessionEndedRoom(rId);
+  }, [activeRoomCode, currentUser?.name]);
 
   const authenticateWithGoogle = async (): Promise<{
     user: UserProfile;
     isNewUser: boolean;
   }> => {
     const result = await signInWithFirebaseGoogle();
-    saveUserLocally(result.user);
     const idToken = await getCurrentFirebaseIdToken();
     if (idToken) {
-      await syncWithBackendApi(
+      const verifyRes = await syncWithBackendApi(
         '/api/auth/verify',
         'POST',
         {
@@ -2240,7 +3577,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
         result.user
       );
+
+      if (verifyRes && verifyRes.user) {
+        const backendUser = verifyRes.user as UserProfile;
+        const cleanMatric = (backendUser.matricOrStaffId || '').trim();
+        const isComplete = Boolean(
+          backendUser.isProfileComplete || Boolean(cleanMatric)
+        );
+        const resolvedUser: UserProfile = {
+          ...result.user,
+          ...backendUser,
+          matricOrStaffId: cleanMatric || result.user.matricOrStaffId,
+          isProfileComplete: isComplete,
+        };
+        saveUserLocally(resolvedUser);
+        saveUserProfileToFirestore(resolvedUser).catch(() => {});
+        return {
+          user: resolvedUser,
+          isNewUser:
+            verifyRes.isNewUser !== undefined
+              ? Boolean(verifyRes.isNewUser)
+              : !isComplete,
+        };
+      }
     }
+    saveUserLocally(result.user);
     return result;
   };
 
@@ -2261,6 +3622,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     avatarTag?: string;
     completeImmediately?: boolean;
   }) => {
+    const stableId = `usr_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+    const isDemo = isDemoAccount({ email, id: stableId });
+
+    if (isDemo) {
+      // Ensure any real Firebase session is signed out so Demo Mode stays completely isolated
+      signOutFirebaseUser().catch(() => { });
+      const demoUser =
+        role === 'lecturer' || email.toLowerCase().includes('adeleke')
+          ? { ...DEMO_LECTURER_USER }
+          : { ...DEMO_STUDENT_USER };
+      saveUserLocally(demoUser);
+      return;
+    }
+
     const initials =
       avatarTag ||
       name
@@ -2270,17 +3645,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .slice(0, 2)
         .toUpperCase();
 
-    const stableId = `usr_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     const nextUser: UserProfile = {
       id: currentUser && currentUser.email === email ? currentUser.id : stableId,
       name,
       email,
       role,
       department,
-      matricOrStaffId:
-        idCode || (role === 'lecturer' ? 'STAFF/CS/2018' : 'CSC/2022/1042'),
-      avatarTag: initials || 'CH',
+      matricOrStaffId: idCode || '',
+      avatarTag: initials || 'CU',
       isProfileComplete: completeImmediately,
+      isDemo: false,
     };
     saveUserLocally(nextUser);
     saveUserProfileToFirestore(nextUser).catch(() => { });
@@ -2312,18 +3686,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated: UserProfile = {
       id: currentUser?.id || `usr_${Date.now()}`,
       email: currentUser?.email || 'user@campus.edu.ng',
-      name: name || 'Campus Student',
+      name: name || 'Campus User',
       role,
-      matricOrStaffId,
+      matricOrStaffId: matricOrStaffId.trim(),
       department,
-      avatarTag: avatarTag || 'CS',
+      avatarTag: avatarTag || 'CU',
       isProfileComplete: true,
+      isDemo: Boolean(currentUser && isDemoAccount(currentUser)),
     };
     saveUserLocally(updated);
-    await Promise.all([
-      saveUserProfileToFirestore(updated),
-      syncWithBackendApi('/api/users/profile', 'POST', { ...updated }, updated),
-    ]);
+    if (!updated.isDemo) {
+      await Promise.all([
+        saveUserProfileToFirestore(updated),
+        syncWithBackendApi('/api/users/profile', 'POST', { ...updated }, updated),
+      ]);
+    }
   };
 
   const logout = async () => {
@@ -2344,6 +3721,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setThemePreference,
         toggleTheme,
         currentUser,
+        isDemoMode,
+        switchDemoPersona,
         isAuthenticated,
         authLoading,
         firebaseReady,
@@ -2388,6 +3767,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeRoomCode,
         setActiveRoomCode,
         activeRoomInfo,
+        endStudioSession,
+        sessionEndedRoom,
         socketConnected,
         selfSocketId,
         participants,
@@ -2418,6 +3799,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addSlide,
         laser,
         emitLaser,
+        streamStroke,
         commitStroke,
         canUndo: strokes.length > 0,
         canRedo: redoStack.length > 0,
@@ -2445,6 +3827,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isCaptionsOn,
         toggleCaptions,
         activeCaptions,
+        transcriptLog,
+        sessionStartedAt,
         polls,
         createPoll,
         votePoll,

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Gear, Bell, Envelope, User, ShieldCheck, Check } from '@phosphor-icons/react';
+import { Gear, Bell, Envelope, User, ShieldCheck, Check, Sun, Moon } from '@phosphor-icons/react';
 import { useApp } from '../context/AppContext';
+import { ThemeToggle } from '../components/ThemeToggle';
 
 export const ClassroomSettingsPage: React.FC = () => {
-  const { isDark, currentUser } = useApp();
+  const { isDark, currentUser, setThemePreference } = useApp();
 
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [commentsOnPosts, setCommentsOnPosts] = useState(true);
@@ -27,7 +28,7 @@ export const ClassroomSettingsPage: React.FC = () => {
           <Gear size={22} />
         </div>
         <div>
-          <h1 className="text-xl font-medium tracking-tight">Classroom Settings</h1>
+          <h1 className="text-xl font-medium tracking-tight">Settings</h1>
           <p className="text-xs text-black/60 dark:text-white/60">
             Account preferences, notification alerts, and class defaults
           </p>
@@ -37,9 +38,8 @@ export const ClassroomSettingsPage: React.FC = () => {
       <form onSubmit={handleSave} className="space-y-6">
         {/* Profile Summary Card */}
         <div
-          className={`p-6 rounded-3xl border space-y-4 ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`p-6 rounded-3xl border space-y-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-black/50 dark:text-white/50">
             <User size={16} />
@@ -48,27 +48,99 @@ export const ClassroomSettingsPage: React.FC = () => {
 
           <div className="flex items-center gap-4">
             <div
-              className={`w-14 h-14 rounded-full flex items-center justify-center text-lg font-mono font-medium ${
-                isDark ? 'bg-[#69DB7C]/20 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
-              }`}
+              className={`w-14 h-14 rounded-full flex items-center justify-center text-lg font-medium ${isDark ? 'bg-[#69DB7C]/20 text-[#69DB7C]' : 'bg-[#ECFDF5] text-[#059669]'
+                }`}
             >
               {currentUser?.avatarTag || 'CU'}
             </div>
             <div>
               <div className="font-medium text-base">{currentUser?.name || 'Guest User'}</div>
-              <div className="text-xs font-mono opacity-60">{currentUser?.email || 'N/A'}</div>
-              <div className="text-[11px] font-mono text-[#059669] dark:text-[#69DB7C] capitalize mt-0.5">
+              <div className="text-xs opacity-60">{currentUser?.email || 'N/A'}</div>
+              <div className="text-[11px] text-[#059669] dark:text-[#69DB7C] capitalize mt-0.5">
                 Role: {currentUser?.role || 'Student'} • ID: {currentUser?.matricOrStaffId || 'N/A'}
               </div>
             </div>
           </div>
         </div>
 
+        {/* Appearance & Theme Card */}
+        <div
+          className={`p-6 rounded-3xl border space-y-5 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
+        >
+          <div className="flex items-center">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-black/50 dark:text-white/50">
+                <Sun size={16} />
+                <span>Appearance & Theme</span>
+              </div>
+              <p className="text-xs text-black/60 dark:text-white/60 mt-1">
+                Toggle between Day (Light) and Night (Dark) mode for your whiteboard, lectures, and dashboard.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* Light Mode Option */}
+            <button
+              type="button"
+              onClick={() => setThemePreference('light')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative ${!isDark
+                ? 'border-[#059669] bg-[#059669]/5 ring-2 ring-[#059669]/20'
+                : 'border-[#3C4043] bg-[#0F1713]/40 hover:border-[#69DB7C]/50'
+                }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-amber-400/15 text-amber-500 flex items-center justify-center">
+                    <Sun size={18} weight={!isDark ? 'fill' : 'regular'} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium">Light Mode</div>
+                    <div className="text-[11px] opacity-60">Daytime clarity</div>
+                  </div>
+                </div>
+                {!isDark && (
+                  <span className="w-5 h-5 rounded-full bg-[#059669] text-white flex items-center justify-center text-xs">
+                    <Check size={12} weight="bold" />
+                  </span>
+                )}
+              </div>
+            </button>
+
+            {/* Dark Mode Option */}
+            <button
+              type="button"
+              onClick={() => setThemePreference('dark')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative ${isDark
+                ? 'border-[#69DB7C] bg-[#69DB7C]/5 ring-2 ring-[#69DB7C]/20'
+                : 'border-[#DADCE0] bg-[#F8F9FA] hover:border-[#059669]/50'
+                }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-[#69DB7C]/15 text-[#69DB7C] flex items-center justify-center">
+                    <Moon size={18} weight={isDark ? 'fill' : 'regular'} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium">Dark Mode</div>
+                    <div className="text-[11px] opacity-60">Nighttime slate</div>
+                  </div>
+                </div>
+                {isDark && (
+                  <span className="w-5 h-5 rounded-full bg-[#69DB7C] text-[#0F1713] flex items-center justify-center text-xs">
+                    <Check size={12} weight="bold" />
+                  </span>
+                )}
+              </div>
+            </button>
+          </div>
+        </div>
+
         {/* Notifications Card */}
         <div
-          className={`p-6 rounded-3xl border space-y-5 ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`p-6 rounded-3xl border space-y-5 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-black/50 dark:text-white/50">
             <Bell size={16} />
@@ -161,14 +233,17 @@ export const ClassroomSettingsPage: React.FC = () => {
         {/* Save Bar */}
         <div className="flex items-center justify-end gap-3 pt-2">
           {savedSuccess && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
               <Check size={16} />
               <span>Settings saved</span>
             </span>
           )}
           <button
             type="submit"
-            className="btn-google px-6 py-2.5 rounded-full bg-[#059669] hover:bg-[#047857] text-white text-xs font-medium cursor-pointer shadow-sm"
+            className={`btn-google px-6 py-2.5 rounded-full text-xs font-medium cursor-pointer shadow-sm ${isDark
+              ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+              : 'bg-[#059669] text-white hover:bg-[#047857]'
+              }`}
           >
             Save Changes
           </button>

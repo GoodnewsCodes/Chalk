@@ -4,22 +4,29 @@ import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
-import { AccessToken } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import {
+  AiCatchUpSummary,
   ChatMessageRecord,
   DvrChapter,
   DvrEvent,
   DvrRecording,
+  FlashcardItem,
   QosSample,
   QuizQuestion,
   RoomParticipant,
   RoomState,
+  StudioPoll,
+  StudioQuestion,
+  TranscriptEntry,
   VideoMode,
 } from './types';
 import {
+  deleteFirestoreDocument,
   FirebaseUserPayload,
   getFirestoreDocument,
   listFirestoreCollection,
+   sanitizeUserId,
   saveUserToFirestore,
   syncRoomToFirestore,
   upsertFirestoreDocument,
@@ -97,7 +104,7 @@ app.use(
         callback(new Error('Origin not allowed by Chalk CORS policy'));
       }
     },
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
     maxAge: 600,
@@ -200,6 +207,8 @@ const broadcastParticipants = (room: RoomState) => {
     roomId: room.id,
     participants: room.participants,
     lecturerName: room.lecturerName,
+    hostUserId: room.hostUserId || null,
+    lecturerId: room.lecturerId || null,
   });
 };
 
@@ -291,8 +300,77 @@ const finalizeSession = (roomId: string) => {
     }
   }
 
+  // Clear blackboard strokes and slide pointer so subsequent classes start clean
+  room.strokes = [];
+  room.activeSlideIndex = 0;
   persistRoom(room);
   rooms.delete(roomId);
+};
+
+/**
+ * Explicitly ends the live studio session for everyone:
+ * Broadcasts `clear_canvas` and `session_ended` to all participants, generates and persists the DVR recording,
+ * deletes any LiveKit room, persists final room state, and clears the room from active memory.
+ */
+const endAndFinalizeRoom = async (roomId: string, endedByName?: string) => {
+  cancelFinalize(roomId);
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  const endedBy = endedByName || room.lecturerName || 'Lecturer';
+
+  // 1. Notify all participants in this room that the canvas is cleared and the studio session has ended
+  io.to(roomId).emit('clear_canvas', { roomId });
+  io.to(roomId).emit('session_ended', {
+    roomId,
+    endedBy,
+    endedAt: new Date().toISOString(),
+    message: 'The studio session has ended.',
+  });
+
+  // 2. Finalize and persist DVR recording
+  const dvr = activeDvrSessions.get(roomId);
+  activeDvrSessions.delete(roomId);
+  if (dvr) {
+    const recording = buildRecording(room, dvr);
+    if (recording) {
+      savedRecordings.set(recording.id, recording);
+      upsertFirestoreDocument(
+        'replays',
+        recording.id,
+        recording as unknown as Record<string, unknown>
+      ).catch(() => {});
+      console.log(
+        `[Chalk Server] Saved recording ${recording.id} for ended room "${roomId}" (${recording.totalEvents} events, ${recording.eventsSizeKb} KB)`
+      );
+    }
+  }
+
+  // 3. Mark room recording as finished, reset board strokes, and persist clean room state
+  room.isRecording = false;
+  room.strokes = [];
+  room.activeSlideIndex = 0;
+  persistRoom(room);
+
+  // 4. Delete room from LiveKit if configured
+  try {
+    const livekitHost = process.env.LIVEKIT_URL || 'ws://127.0.0.1:7880';
+    const livekitKey = process.env.LIVEKIT_API_KEY || 'devkey';
+    const livekitSecret = process.env.LIVEKIT_API_SECRET || 'secret';
+    const roomService = new RoomServiceClient(livekitHost, livekitKey, livekitSecret);
+    await roomService.deleteRoom(roomId).catch(() => {});
+  } catch (err) {
+    // LiveKit may not be running or standalone
+  }
+
+  // 5. Delete room from active in-memory Map
+  rooms.delete(roomId);
+
+  // 6. Broadcast updated active rooms to all listeners
+  const activeRooms = Array.from(rooms.values())
+    .filter((r) => r.participants.length > 0)
+    .map(summarizeRoom);
+  io.emit('rooms_update', activeRooms);
 };
 
 const scheduleFinalizeIfEmpty = (room: RoomState) => {
@@ -314,6 +392,8 @@ const summarizeRoom = (r: RoomState) => ({
   id: r.id,
   title: r.title,
   lecturerName: r.lecturerName,
+  hostUserId: r.hostUserId || null,
+  lecturerId: r.lecturerId || null,
   courseCode: r.courseCode,
   courseId: r.courseId || null,
   participantCount: r.participants.length,
@@ -342,17 +422,109 @@ const recordingSummary = (r: DvrRecording) => ({
   chapters: r.chapters,
 });
 
+const MAX_TRANSCRIPT_PER_ROOM = 500;
+
+const formatMsTimestamp = (ms: number): string => {
+  const safe = Math.max(0, Math.floor(ms / 1000));
+  const mins = String(Math.floor(safe / 60)).padStart(2, '0');
+  const secs = String(safe % 60).padStart(2, '0');
+  return `${mins}:${secs}`;
+};
+
+export interface ClientCatchUpSnapshot {
+  title?: string;
+  courseCode?: string;
+  courseId?: string;
+  lecturerName?: string;
+  sessionStartedAt?: number;
+  elapsedMs?: number;
+  participantCount?: number;
+  activeSlideIndex?: number;
+  totalSlides?: number;
+  strokes?: any[];
+  chat?: any[];
+  transcript?: any[];
+  polls?: any[];
+  questions?: any[];
+  courseContext?: {
+    department?: string;
+    subject?: string;
+    topics?: string[];
+    recentAnnouncements?: string[];
+    assignments?: string[];
+  };
+}
+
 /**
- * Builds a "Catch me up" recap from what actually happened in the live session:
- * board activity per time window, page changes, and messages.
+ * Builds a "Catch me up" recap from what actually happened in the live session
+ * from 00:00 (sessionStartedAt) up to the exact moment it was requested.
  */
-const buildCatchUp = (room: RoomState) => {
-  const dvr = activeDvrSessions.get(room.id);
-  const startTime = dvr?.startTime ?? room.sessionStartedAt;
+const buildCatchUp = (room?: RoomState, clientSnap?: ClientCatchUpSnapshot, fallbackRoomId = 'studio') => {
+  const roomId = room?.id || fallbackRoomId;
+  const dvr = room ? activeDvrSessions.get(room.id) : undefined;
   const now = Date.now();
-  const elapsedMs = Math.max(0, now - startTime);
+  const startTime =
+    dvr?.startTime ??
+    room?.sessionStartedAt ??
+    (typeof clientSnap?.sessionStartedAt === 'number' && clientSnap.sessionStartedAt > 0
+      ? clientSnap.sessionStartedAt
+      : now - (typeof clientSnap?.elapsedMs === 'number' ? clientSnap.elapsedMs : 60_000));
+  const elapsedMs = Math.max(1000, now - startTime);
   const windowMs =
-    elapsedMs <= 15 * 60_000 ? 5 * 60_000 : elapsedMs <= 60 * 60_000 ? 10 * 60_000 : 15 * 60_000;
+    elapsedMs <= 15 * 60_000 ? 3 * 60_000 : elapsedMs <= 60 * 60_000 ? 10 * 60_000 : 15 * 60_000;
+
+  const strokes =
+    room && room.strokes.length > 0
+      ? room.strokes
+      : Array.isArray(clientSnap?.strokes)
+        ? clientSnap!.strokes
+        : [];
+  const chat: ChatMessageRecord[] =
+    room && room.chat.length > 0
+      ? room.chat
+      : Array.isArray(clientSnap?.chat)
+        ? clientSnap!.chat.map((m: any, i: number) => ({
+            id: String(m?.id || `chat_${i}`),
+            roomId,
+            userId: String(m?.userId || ''),
+            senderName: sanitizeDisplayText(m?.senderName, 48) || 'Participant',
+            senderRole: m?.senderRole === 'lecturer' ? 'lecturer' : 'student',
+            text: sanitizeMultilineText(m?.text, 1000),
+            timestamp: typeof m?.timestamp === 'number' ? m.timestamp : now,
+          }))
+        : [];
+  const transcript: TranscriptEntry[] =
+    room && Array.isArray(room.transcript) && room.transcript.length > 0
+      ? room.transcript
+      : Array.isArray(clientSnap?.transcript)
+        ? clientSnap!.transcript.map((t: any, i: number) => {
+            const ts = typeof t?.timestamp === 'number' ? t.timestamp : now;
+            const offset =
+              typeof t?.offsetMs === 'number' ? t.offsetMs : Math.max(0, ts - startTime);
+            return {
+              id: String(t?.id || `tr_${i}`),
+              roomId,
+              speakerId: String(t?.speakerId || ''),
+              speakerName: sanitizeDisplayText(t?.speakerName || t?.speaker, 48) || 'Speaker',
+              speakerRole: t?.speakerRole === 'lecturer' ? 'lecturer' : 'student',
+              text: sanitizeMultilineText(t?.text, 600),
+              timestamp: ts,
+              offsetMs: offset,
+            };
+          })
+        : [];
+  const polls: StudioPoll[] =
+    room && Array.isArray(room.polls) && room.polls.length > 0
+      ? room.polls
+      : Array.isArray(clientSnap?.polls)
+        ? (clientSnap!.polls as StudioPoll[])
+        : [];
+  const questions: StudioQuestion[] =
+    room && Array.isArray(room.questions) && room.questions.length > 0
+      ? room.questions
+      : Array.isArray(clientSnap?.questions)
+        ? (clientSnap!.questions as StudioQuestion[])
+        : [];
 
   type Segment = {
     startMs: number;
@@ -365,7 +537,8 @@ const buildCatchUp = (room: RoomState) => {
   };
   const segments = new Map<number, Segment>();
   const getSegment = (t: number) => {
-    const idx = Math.floor(t / windowMs);
+    const clampedT = Math.max(0, Math.min(elapsedMs, t));
+    const idx = Math.floor(clampedT / windowMs);
     let seg = segments.get(idx);
     if (!seg) {
       seg = {
@@ -382,64 +555,797 @@ const buildCatchUp = (room: RoomState) => {
     return seg;
   };
 
-  for (const ev of dvr?.events ?? []) {
-    if (ev.type === 'stroke') {
-      const seg = getSegment(ev.t);
+  if (dvr?.events && dvr.events.length > 0) {
+    for (const ev of dvr.events) {
+      if (ev.type === 'stroke') {
+        const seg = getSegment(ev.t);
+        seg.strokes += 1;
+        const slide = Number(ev.data?.slideIndex ?? 0);
+        if (!seg.slides.includes(slide)) seg.slides.push(slide);
+        const who = String(ev.data?.userName || '');
+        if (who && !seg.contributors.includes(who)) seg.contributors.push(who);
+      } else if (ev.type === 'chat') {
+        const seg = getSegment(ev.t);
+        seg.chats += 1;
+        if (ev.data?.senderRole === 'lecturer' && seg.highlights.length < 4) {
+          const text = String(ev.data.text || '');
+          seg.highlights.push(
+            `${ev.data.senderName}: ${text.length > 160 ? `${text.slice(0, 157)}...` : text}`
+          );
+        }
+      } else if (ev.type === 'transcript') {
+        const seg = getSegment(ev.t);
+        if (seg.highlights.length < 4 && ev.data?.text) {
+          const text = String(ev.data.text || '');
+          seg.highlights.push(
+            `[Spoken] ${ev.data.speakerName || 'Speaker'}: ${text.length > 160 ? `${text.slice(0, 157)}...` : text}`
+          );
+        }
+      } else if (ev.type === 'slide_change') {
+        const seg = getSegment(ev.t);
+        const slide = Number(ev.data?.slideIndex ?? 0);
+        if (!seg.slides.includes(slide)) seg.slides.push(slide);
+        if (seg.highlights.length < 4) seg.highlights.push(`Moved to board page ${slide + 1}`);
+      } else if (ev.type === 'clear') {
+        const seg = getSegment(ev.t);
+        if (seg.highlights.length < 4) seg.highlights.push('Board was wiped');
+      }
+    }
+  } else {
+    // Reconstruct timeline segments from strokes, chat, and transcript when DVR events are empty
+    for (const s of strokes) {
+      const offset =
+        typeof s.timestamp === 'number' && s.timestamp > startTime
+          ? s.timestamp - startTime
+          : 0;
+      const seg = getSegment(offset);
       seg.strokes += 1;
-      const slide = Number(ev.data?.slideIndex ?? 0);
+      const slide = typeof s.slideIndex === 'number' ? s.slideIndex : 0;
       if (!seg.slides.includes(slide)) seg.slides.push(slide);
-      const who = String(ev.data?.userName || '');
-      if (who && !seg.contributors.includes(who)) seg.contributors.push(who);
-    } else if (ev.type === 'chat') {
-      const seg = getSegment(ev.t);
+      if (s.userName && !seg.contributors.includes(s.userName)) {
+        seg.contributors.push(s.userName);
+      }
+    }
+    for (const m of chat) {
+      const offset =
+        typeof m.timestamp === 'number' && m.timestamp > startTime
+          ? m.timestamp - startTime
+          : elapsedMs / 2;
+      const seg = getSegment(offset);
       seg.chats += 1;
-      if (ev.data?.senderRole === 'lecturer' && seg.highlights.length < 4) {
-        const text = String(ev.data.text || '');
+      if (m.senderRole === 'lecturer' && seg.highlights.length < 4) {
         seg.highlights.push(
-          `${ev.data.senderName}: ${text.length > 160 ? `${text.slice(0, 157)}...` : text}`
+          `${m.senderName}: ${m.text.length > 160 ? `${m.text.slice(0, 157)}...` : m.text}`
         );
       }
-    } else if (ev.type === 'slide_change') {
-      const seg = getSegment(ev.t);
-      const slide = Number(ev.data?.slideIndex ?? 0);
-      if (!seg.slides.includes(slide)) seg.slides.push(slide);
-      if (seg.highlights.length < 4) seg.highlights.push(`Moved to board page ${slide + 1}`);
-    } else if (ev.type === 'clear') {
-      const seg = getSegment(ev.t);
-      if (seg.highlights.length < 4) seg.highlights.push('Board was wiped');
+    }
+    for (const tr of transcript) {
+      const seg = getSegment(tr.offsetMs);
+      if (seg.highlights.length < 4 && tr.text) {
+        seg.highlights.push(
+          `[Spoken] ${tr.speakerName}: ${tr.text.length > 160 ? `${tr.text.slice(0, 157)}...` : tr.text}`
+        );
+      }
     }
   }
 
-  const slideStats = new Map<number, { strokeCount: number; contributors: string[] }>();
-  for (const s of room.strokes) {
+  const slideStats = new Map<number, { strokeCount: number; contributors: string[]; tools: string[] }>();
+  for (const s of strokes) {
     const idx = typeof s.slideIndex === 'number' ? s.slideIndex : 0;
-    const entry = slideStats.get(idx) || { strokeCount: 0, contributors: [] };
+    const entry = slideStats.get(idx) || { strokeCount: 0, contributors: [], tools: [] };
     entry.strokeCount += 1;
     if (s.userName && !entry.contributors.includes(s.userName)) {
       entry.contributors.push(s.userName);
+    }
+    if (s.tool && !entry.tools.includes(s.tool)) {
+      entry.tools.push(s.tool);
     }
     slideStats.set(idx, entry);
   }
 
   return {
-    roomId: room.id,
-    title: room.title,
-    courseCode: room.courseCode,
-    lecturerName: room.lecturerName,
-    isLive: room.participants.length > 0,
+    roomId,
+    title: room?.title || sanitizeDisplayText(clientSnap?.title, 96) || `Room ${roomId}`,
+    courseCode: room?.courseCode || sanitizeDisplayText(clientSnap?.courseCode, 24) || '',
+    courseId: room?.courseId || sanitizeRoomOrEntityId(clientSnap?.courseId) || undefined,
+    lecturerName: room?.lecturerName || sanitizeDisplayText(clientSnap?.lecturerName, 64) || 'Lecturer',
+    isLive: room ? room.participants.length > 0 : true,
     sessionStartedAt: startTime,
     elapsedMs,
-    participantCount: room.participants.length,
-    strokeCount: room.strokes.length,
-    chatCount: room.chat.length,
-    activeSlideIndex: room.activeSlideIndex,
-    totalSlides: room.totalSlides,
+    participantCount: room ? Math.max(1, room.participants.length) : Math.max(1, Number(clientSnap?.participantCount) || 1),
+    strokeCount: strokes.length,
+    chatCount: chat.length,
+    activeSlideIndex: room?.activeSlideIndex ?? (Number(clientSnap?.activeSlideIndex) || 0),
+    totalSlides: room?.totalSlides ?? (Number(clientSnap?.totalSlides) || 1),
     segments: Array.from(segments.values()).sort((a, b) => a.startMs - b.startMs),
     slides: Array.from(slideStats.entries())
       .map(([slideIndex, v]) => ({ slideIndex, ...v }))
       .sort((a, b) => a.slideIndex - b.slideIndex),
-    lecturerMessages: room.chat.filter((m) => m.senderRole === 'lecturer').slice(-5),
-    recentMessages: room.chat.slice(-8),
+    lecturerMessages: chat.filter((m) => m.senderRole === 'lecturer').slice(-8),
+    recentMessages: chat.slice(-15),
+    transcript: transcript.slice(-80),
+    polls: polls.slice(0, 10),
+    questions: questions.slice(0, 15),
+    courseContext: clientSnap?.courseContext,
+  };
+};
+
+/**
+ * Reconstructs the Catch-Up synthesis context from a persisted session recording,
+ * matching `buildCatchUp` so Gemini AI synthesis and follow-up Q&A work identically
+ * for completed sessions outside the live Studio.
+ */
+const buildCatchUpFromRecording = (recording: DvrRecording): ReturnType<typeof buildCatchUp> => {
+  const startTime = recording.recordedAt ? Date.parse(recording.recordedAt) || Date.now() - recording.durationMs : Date.now() - recording.durationMs;
+  const elapsedMs = Math.max(1000, recording.durationMs || 60_000);
+  const windowMs =
+    elapsedMs <= 15 * 60_000 ? 3 * 60_000 : elapsedMs <= 60 * 60_000 ? 10 * 60_000 : 15 * 60_000;
+
+  type Segment = {
+    startMs: number;
+    endMs: number;
+    strokes: number;
+    chats: number;
+    slides: number[];
+    contributors: string[];
+    highlights: string[];
+  };
+  const segments = new Map<number, Segment>();
+  const getSegment = (t: number) => {
+    const clampedT = Math.max(0, Math.min(elapsedMs, t));
+    const idx = Math.floor(clampedT / windowMs);
+    let seg = segments.get(idx);
+    if (!seg) {
+      seg = {
+        startMs: idx * windowMs,
+        endMs: Math.min(elapsedMs, (idx + 1) * windowMs),
+        strokes: 0,
+        chats: 0,
+        slides: [],
+        contributors: [],
+        highlights: [],
+      };
+      segments.set(idx, seg);
+    }
+    return seg;
+  };
+
+  const slideStats = new Map<number, { strokeCount: number; contributors: string[]; tools: string[] }>();
+  const chat: ChatMessageRecord[] = [];
+  const transcript: TranscriptEntry[] = [];
+  const polls: StudioPoll[] = [];
+  const questions: StudioQuestion[] = [];
+  let maxSlideIndex = 0;
+
+  for (let i = 0; i < (recording.events || []).length; i++) {
+    const ev = recording.events[i];
+    if (ev.type === 'stroke') {
+      const seg = getSegment(ev.t);
+      seg.strokes += 1;
+      const slide = Number(ev.data?.slideIndex ?? 0);
+      if (slide > maxSlideIndex) maxSlideIndex = slide;
+      if (!seg.slides.includes(slide)) seg.slides.push(slide);
+      const who = String(ev.data?.userName || '');
+      if (who && !seg.contributors.includes(who)) seg.contributors.push(who);
+
+      const entry = slideStats.get(slide) || { strokeCount: 0, contributors: [], tools: [] };
+      entry.strokeCount += 1;
+      if (who && !entry.contributors.includes(who)) entry.contributors.push(who);
+      const tool = String(ev.data?.tool || '');
+      if (tool && !entry.tools.includes(tool)) entry.tools.push(tool);
+      slideStats.set(slide, entry);
+    } else if (ev.type === 'chat' && ev.data) {
+      const seg = getSegment(ev.t);
+      seg.chats += 1;
+      const msg: ChatMessageRecord = {
+        id: String(ev.data.id || `chat_${i}`),
+        roomId: recording.roomId,
+        userId: String(ev.data.userId || ''),
+        senderName: sanitizeDisplayText(ev.data.senderName, 48) || 'Participant',
+        senderRole: ev.data.senderRole === 'lecturer' ? 'lecturer' : 'student',
+        text: sanitizeMultilineText(ev.data.text, 1000),
+        timestamp: startTime + ev.t,
+      };
+      chat.push(msg);
+      if (msg.senderRole === 'lecturer' && seg.highlights.length < 4 && msg.text) {
+        seg.highlights.push(
+          `${msg.senderName}: ${msg.text.length > 160 ? `${msg.text.slice(0, 157)}...` : msg.text}`
+        );
+      }
+    } else if (ev.type === 'transcript' && ev.data?.text) {
+      const seg = getSegment(ev.t);
+      const tr: TranscriptEntry = {
+        id: String(ev.data.id || `tr_${i}`),
+        roomId: recording.roomId,
+        speakerId: String(ev.data.speakerId || ''),
+        speakerName: sanitizeDisplayText(ev.data.speakerName, 48) || 'Speaker',
+        speakerRole: ev.data.speakerRole === 'lecturer' ? 'lecturer' : 'student',
+        text: sanitizeMultilineText(ev.data.text, 600),
+        timestamp: startTime + ev.t,
+        offsetMs: ev.t,
+      };
+      transcript.push(tr);
+      if (seg.highlights.length < 4) {
+        seg.highlights.push(
+          `[Spoken] ${tr.speakerName}: ${tr.text.length > 160 ? `${tr.text.slice(0, 157)}...` : tr.text}`
+        );
+      }
+    } else if (ev.type === 'slide_change') {
+      const seg = getSegment(ev.t);
+      const slide = Number(ev.data?.slideIndex ?? 0);
+      if (slide > maxSlideIndex) maxSlideIndex = slide;
+      if (!seg.slides.includes(slide)) seg.slides.push(slide);
+      if (seg.highlights.length < 4) seg.highlights.push(`Moved to board page ${slide + 1}`);
+    } else if (ev.type === 'clear') {
+      const seg = getSegment(ev.t);
+      if (seg.highlights.length < 4) seg.highlights.push('Board was wiped');
+    } else if (ev.type === 'poll' && ev.data) {
+      polls.push(ev.data as StudioPoll);
+    } else if (ev.type === 'question' && ev.data) {
+      questions.push(ev.data as StudioQuestion);
+    }
+  }
+
+  return {
+    roomId: recording.roomId,
+    title: recording.title,
+    courseCode: recording.courseCode || '',
+    courseId: recording.courseId,
+    lecturerName: recording.lecturerName || 'Lecturer',
+    isLive: false,
+    sessionStartedAt: startTime,
+    elapsedMs,
+    participantCount: Math.max(1, recording.participantCount || 1),
+    strokeCount: recording.strokeCount ?? slideStats.size,
+    chatCount: recording.chatCount ?? chat.length,
+    activeSlideIndex: maxSlideIndex,
+    totalSlides: Math.max(1, maxSlideIndex + 1),
+    segments: Array.from(segments.values()).sort((a, b) => a.startMs - b.startMs),
+    slides: Array.from(slideStats.entries())
+      .map(([slideIndex, v]) => ({ slideIndex, ...v }))
+      .sort((a, b) => a.slideIndex - b.slideIndex),
+    lecturerMessages: chat.filter((m) => m.senderRole === 'lecturer').slice(-8),
+    recentMessages: chat.slice(-15),
+    transcript: transcript.slice(-80),
+    polls: polls.slice(0, 10),
+    questions: questions.slice(0, 15),
+    courseContext: undefined,
+  };
+};
+
+const buildSessionPromptContext = (catchUp: ReturnType<typeof buildCatchUp>): string => {
+  const lines: string[] = [];
+  lines.push(`SESSION METADATA (From 00:00 to ${formatMsTimestamp(catchUp.elapsedMs)}):`);
+  lines.push(`- Room ID: ${catchUp.roomId}`);
+  lines.push(`- Lecture / Studio Title: ${catchUp.title}`);
+  if (catchUp.courseCode) lines.push(`- Course Code: ${catchUp.courseCode}`);
+  if (catchUp.lecturerName) lines.push(`- Lecturer / Host: ${catchUp.lecturerName}`);
+  lines.push(`- Elapsed Time Since Start: ${formatMsTimestamp(catchUp.elapsedMs)} (${Math.round(catchUp.elapsedMs / 1000)}s)`);
+  lines.push(`- Active Participants: ${catchUp.participantCount}`);
+  lines.push(`- Chalkboard State: Currently on Slide ${catchUp.activeSlideIndex + 1} of ${catchUp.totalSlides} (${catchUp.strokeCount} total vector strokes)`);
+
+  if (catchUp.courseContext) {
+    const cc = catchUp.courseContext;
+    lines.push(`\nCOURSE ACADEMIC CONTEXT:`);
+    if (cc.department) lines.push(`- Department: ${cc.department}`);
+    if (cc.subject) lines.push(`- Subject: ${cc.subject}`);
+    if (Array.isArray(cc.topics) && cc.topics.length > 0) {
+      lines.push(`- Syllabus / Course Modules: ${cc.topics.slice(0, 6).join(' | ')}`);
+    }
+    if (Array.isArray(cc.recentAnnouncements) && cc.recentAnnouncements.length > 0) {
+      lines.push(`- Recent Lecturer Announcements: ${cc.recentAnnouncements.slice(0, 3).join(' // ')}`);
+    }
+    if (Array.isArray(cc.assignments) && cc.assignments.length > 0) {
+      lines.push(`- Related Classwork / Problem Sets: ${cc.assignments.slice(0, 3).join(' | ')}`);
+    }
+  }
+
+  if (catchUp.slides.length > 0) {
+    lines.push(`\nCHALKBOARD SLIDE ACTIVITY (00:00 -> ${formatMsTimestamp(catchUp.elapsedMs)}):`);
+    for (const s of catchUp.slides) {
+      const toolsInfo = (s as any).tools?.length ? ` using tools [${(s as any).tools.join(', ')}]` : '';
+      const whoInfo = s.contributors.length ? ` by ${s.contributors.join(', ')}` : '';
+      lines.push(`- Slide ${s.slideIndex + 1}: ${s.strokeCount} vector strokes${toolsInfo}${whoInfo}`);
+    }
+  }
+
+  if (catchUp.segments.length > 0) {
+    lines.push(`\nTIME-WINDOWED TELEMETRY SEGMENTS:`);
+    for (const seg of catchUp.segments) {
+      const range = `${formatMsTimestamp(seg.startMs)} - ${formatMsTimestamp(seg.endMs)}`;
+      const slidesText = seg.slides.length ? `Slides [${seg.slides.map((n) => n + 1).join(', ')}]` : 'No board strokes';
+      const highlightsText = seg.highlights.length ? ` | Highlights: ${seg.highlights.join('; ')}` : '';
+      lines.push(`- [${range}] ${seg.strokes} strokes on ${slidesText}, ${seg.chats} chat msgs${highlightsText}`);
+    }
+  }
+
+  if (catchUp.transcript.length > 0) {
+    lines.push(`\nLIVE SPEECH TRANSCRIPT (00:00 -> ${formatMsTimestamp(catchUp.elapsedMs)}):`);
+    for (const tr of catchUp.transcript) {
+      lines.push(`- [${formatMsTimestamp(tr.offsetMs)}] ${tr.speakerName} (${tr.speakerRole}): "${tr.text}"`);
+    }
+  } else {
+    lines.push(`\nLIVE SPEECH TRANSCRIPT: No spoken transcript segments recorded yet.`);
+  }
+
+  if (catchUp.recentMessages.length > 0) {
+    lines.push(`\nIN-CALL CHAT MESSAGES (00:00 -> ${formatMsTimestamp(catchUp.elapsedMs)}):`);
+    for (const m of catchUp.recentMessages) {
+      const relMs = typeof m.timestamp === 'number' ? Math.max(0, m.timestamp - catchUp.sessionStartedAt) : 0;
+      lines.push(`- [${formatMsTimestamp(relMs)}] ${m.senderName} (${m.senderRole}): "${m.text}"`);
+    }
+  }
+
+  if (catchUp.polls.length > 0) {
+    lines.push(`\nLIVE POLLS IN SESSION:`);
+    for (const p of catchUp.polls) {
+      const opts = (p.options || []).map((o) => `${o.text} (${o.votes} votes)`).join(', ');
+      lines.push(`- Poll (${p.isOpen ? 'OPEN' : 'CLOSED'}): "${p.question}" -> Options: ${opts}`);
+    }
+  }
+
+  if (catchUp.questions.length > 0) {
+    lines.push(`\nSTUDENT Q&A QUESTIONS IN SESSION:`);
+    for (const q of catchUp.questions) {
+      lines.push(
+        `- Q&A by ${q.authorName} (${q.upvotes?.length || 0} upvotes, ${q.isAnswered ? 'ANSWERED' : 'OPEN'}): "${q.text}"`
+      );
+    }
+  }
+
+  return lines.join('\n');
+};
+
+const hasSessionActivity = (catchUp: ReturnType<typeof buildCatchUp>): boolean =>
+  catchUp.strokeCount > 0 ||
+  catchUp.chatCount > 0 ||
+  catchUp.transcript.length > 0 ||
+  catchUp.polls.length > 0 ||
+  catchUp.questions.length > 0;
+
+const callGeminiCatchUp = async (
+  catchUp: ReturnType<typeof buildCatchUp>,
+  overrideApiKey?: string
+): Promise<{ aiSummary?: AiCatchUpSummary; aiError?: string; aiErrorCode?: string }> => {
+  if (!hasSessionActivity(catchUp)) {
+    return {
+      aiSummary: {
+        overview: 'Nothing has been said or done in this studio session yet.',
+        takeaways: [],
+        walkthrough: [],
+        keyConceptsOrFormulas: [],
+        generatedAtIso: new Date().toISOString(),
+        isEmptySession: true,
+      },
+    };
+  }
+
+  const apiKey = (overrideApiKey || process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    return {
+      aiErrorCode: 'GEMINI_API_KEY_MISSING',
+      aiError:
+        'AI API key is not configured on the backend server. Add your API key on the server (or paste your key below) to generate session summaries.',
+    };
+  }
+  if (overrideApiKey && overrideApiKey.trim()) {
+    process.env.GEMINI_API_KEY = overrideApiKey.trim();
+  }
+
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+
+  const sessionContext = buildSessionPromptContext(catchUp);
+  const currentElapsedStr = formatMsTimestamp(catchUp.elapsedMs);
+
+  const systemInstruction = `You are Chalk AI, an academic pedagogical assistant embedded inside a live university virtual classroom ("Chalk Studio").
+A student or participant just clicked the "Catch Me Up!" button at elapsed timestamp ${currentElapsedStr} (measuring from 00:00 when the studio session started).
+Your job is to synthesize a clear, accurate, academically rigorous summary of everything that has happened in the studio session from 00:00 up to ${currentElapsedStr} based on the provided live session log (speech transcript, chalkboard vector activity & slides, lecturer chat notices, student Q&A, polls, and course context).
+Return ONLY valid JSON matching the requested schema:
+- "overview": A cohesive 2-4 sentence executive briefing explaining what the session is covering and what has taken place from 00:00 up to ${currentElapsedStr}.
+- "takeaways": An array of 3 to 5 concise, high-signal bullet points summarizing the core concepts, board annotations, notices, or discussions covered so far.
+- "walkthrough": An array of chronological phases covering 00:00 to ${currentElapsedStr}, each with "timeRange" (e.g. "00:00 - 02:15"), "title", "summary", and optional "slideIndex" (0-based integer).
+- "keyConceptsOrFormulas": An array of 2 to 5 key academic terms, invariants, equations, or action items relevant to the session so far.`;
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Generate the "Catch Me Up!" live session summary from 00:00 to ${currentElapsedStr} for the following studio session:\n\n${sessionContext}`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              overview: { type: 'STRING' },
+              takeaways: {
+                type: 'ARRAY',
+                items: { type: 'STRING' },
+              },
+              walkthrough: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    timeRange: { type: 'STRING' },
+                    title: { type: 'STRING' },
+                    summary: { type: 'STRING' },
+                    slideIndex: { type: 'INTEGER' },
+                  },
+                  required: ['timeRange', 'title', 'summary'],
+                },
+              },
+              keyConceptsOrFormulas: {
+                type: 'ARRAY',
+                items: { type: 'STRING' },
+              },
+            },
+            required: ['overview', 'takeaways', 'walkthrough', 'keyConceptsOrFormulas'],
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      console.warn(`[Chalk AI] Model ${model} returned HTTP ${response.status}:`, errBody);
+      return {
+        aiErrorCode: `AI_HTTP_${response.status}`,
+        aiError: `AI service returned HTTP ${response.status}.`,
+      };
+    }
+
+    const json = (await response.json()) as any;
+    const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText || typeof rawText !== 'string') {
+      return {
+        aiErrorCode: 'AI_EMPTY_RESPONSE',
+        aiError: 'AI service returned an empty summary response.',
+      };
+    }
+
+    const parsed = JSON.parse(rawText);
+    const aiSummary: AiCatchUpSummary = {
+      overview: sanitizeMultilineText(parsed.overview, 1500) || 'Session summary generated.',
+      takeaways: Array.isArray(parsed.takeaways)
+        ? parsed.takeaways.map((t: unknown) => sanitizeMultilineText(t, 500)).filter(Boolean).slice(0, 8)
+        : [],
+      walkthrough: Array.isArray(parsed.walkthrough)
+        ? parsed.walkthrough.slice(0, 8).map((w: any) => ({
+            timeRange: sanitizeDisplayText(w?.timeRange, 32) || `00:00 - ${currentElapsedStr}`,
+            title: sanitizeDisplayText(w?.title, 120) || 'Session Activity',
+            summary: sanitizeMultilineText(w?.summary, 800) || '',
+            ...(typeof w?.slideIndex === 'number' && w.slideIndex >= 0
+              ? { slideIndex: w.slideIndex }
+              : {}),
+          }))
+        : [],
+      keyConceptsOrFormulas: Array.isArray(parsed.keyConceptsOrFormulas)
+        ? parsed.keyConceptsOrFormulas
+            .map((k: unknown) => sanitizeDisplayText(k, 160))
+            .filter(Boolean)
+            .slice(0, 8)
+        : [],
+      generatedAtIso: new Date().toISOString(),
+    };
+
+    return { aiSummary };
+  } catch (err: any) {
+    console.warn(`[Chalk AI] Exception during Catch Me Up:`, err?.message || err);
+    return {
+      aiErrorCode: 'AI_REQUEST_FAILED',
+      aiError: 'Failed to reach the AI service. Check network connectivity.',
+    };
+  }
+};
+
+const callGeminiFollowUp = async (
+  catchUp: ReturnType<typeof buildCatchUp>,
+  question: string,
+  history: { role: 'user' | 'assistant'; text: string }[] = [],
+  overrideApiKey?: string
+): Promise<{ answer?: string; error?: string; errorCode?: string }> => {
+  if (!hasSessionActivity(catchUp)) {
+    return {
+      answer:
+        'Nothing has been said or done in this studio session yet, so there is no session activity to answer questions from.',
+    };
+  }
+
+  const apiKey = (overrideApiKey || process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    return {
+      errorCode: 'GEMINI_API_KEY_MISSING',
+      error: 'AI API key is not configured on the backend server.',
+    };
+  }
+  if (overrideApiKey && overrideApiKey.trim()) {
+    process.env.GEMINI_API_KEY = overrideApiKey.trim();
+  }
+
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+
+  const sessionContext = buildSessionPromptContext(catchUp);
+  const currentElapsedStr = formatMsTimestamp(catchUp.elapsedMs);
+
+  const systemInstruction = `You are Chalk AI, the live in-class pedagogical assistant for "${catchUp.title}" (${catchUp.courseCode || catchUp.roomId}).
+Answer the student's follow-up question clearly and concisely (in 2-5 sentences or bullet points) based on everything that has happened in the studio session from 00:00 up to ${currentElapsedStr}, as well as the academic subject matter of the course.
+
+LIVE STUDIO CONTEXT (00:00 -> ${currentElapsedStr}):
+${sessionContext}`;
+
+  const contents = [
+    ...history.slice(-6).map((h) => ({
+      role: h.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: sanitizeMultilineText(h.text, 1000) }],
+    })),
+    {
+      role: 'user',
+      parts: [{ text: sanitizeMultilineText(question, 600) }],
+    },
+  ];
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        contents,
+        generationConfig: {
+          temperature: 0.35,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return {
+        errorCode: `AI_HTTP_${response.status}`,
+        error: `AI service returned HTTP ${response.status}.`,
+      };
+    }
+
+    const json = (await response.json()) as any;
+    const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText || typeof rawText !== 'string') {
+      return {
+        errorCode: 'AI_EMPTY_RESPONSE',
+        error: 'AI service returned an empty answer.',
+      };
+    }
+    return { answer: rawText.trim() };
+  } catch {
+    return {
+      errorCode: 'AI_REQUEST_FAILED',
+      error: 'Failed to reach the AI service.',
+    };
+  }
+};
+
+export interface GenerateFlashcardsPayload {
+  courseId: string;
+  courseCode?: string;
+  courseTitle?: string;
+  department?: string;
+  topics?: string[];
+  notes?: string;
+  materials?: Array<{ title: string; description?: string; type?: string; attachments?: any[] }>;
+  announcements?: string[];
+  transcripts?: string[];
+  userPrompt?: string;
+  count?: number;
+  geminiApiKey?: string;
+}
+
+const buildFlashcardsPromptContext = (payload: GenerateFlashcardsPayload): string => {
+  const lines: string[] = [];
+  lines.push('=== COURSE ACADEMIC INFORMATION ===');
+  lines.push(`Course Identifier: ${payload.courseCode || payload.courseId}`);
+  if (payload.courseTitle) lines.push(`Title: ${payload.courseTitle}`);
+  if (payload.department) lines.push(`Department: ${payload.department}`);
+
+  if (Array.isArray(payload.topics) && payload.topics.length > 0) {
+    lines.push('\n=== SYLLABUS MODULES & TOPICS ===');
+    payload.topics.forEach((t, i) => lines.push(`${i + 1}. ${t}`));
+  }
+
+  if (payload.notes && payload.notes.trim()) {
+    lines.push('\n=== COURSE LECTURE NOTES & DERIVATIONS ===');
+    lines.push(payload.notes.trim().slice(0, 16_000));
+  }
+
+  if (Array.isArray(payload.materials) && payload.materials.length > 0) {
+    lines.push('\n=== COURSE CLASSWORK, REFERENCE MATERIALS & ASSIGNMENTS ===');
+    payload.materials.slice(0, 12).forEach((m, idx) => {
+      lines.push(`${idx + 1}. [${m.type || 'material'}] ${m.title}`);
+      if (m.description) lines.push(`   Description: ${m.description.slice(0, 500)}`);
+    });
+  }
+
+  if (Array.isArray(payload.announcements) && payload.announcements.length > 0) {
+    lines.push('\n=== LECTURER ANNOUNCEMENTS & STREAM NOTICES ===');
+    payload.announcements.slice(0, 8).forEach((a) => lines.push(`- ${a}`));
+  }
+
+  if (Array.isArray(payload.transcripts) && payload.transcripts.length > 0) {
+    lines.push('\n=== RECENT LECTURE TRANSCRIPT EXCERPTS ===');
+    payload.transcripts.slice(0, 8).forEach((tr) => lines.push(`- ${tr}`));
+  }
+
+  if (payload.userPrompt && payload.userPrompt.trim()) {
+    lines.push('\n=== STUDENT FOCUS / SPECIFIC INSTRUCTION ===');
+    lines.push(`Please prioritize the following concept or exam focus: "${payload.userPrompt.trim()}".`);
+  }
+
+  return lines.join('\n');
+};
+
+const callGeminiGenerateFlashcards = async (
+  payload: GenerateFlashcardsPayload,
+  overrideApiKey?: string
+): Promise<{
+  flashcards?: FlashcardItem[];
+  error?: string;
+  errorCode?: string;
+  modelUsed?: string;
+}> => {
+  const apiKey = (overrideApiKey || payload.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    return {
+      errorCode: 'GEMINI_API_KEY_MISSING',
+      error:
+        'GEMINI_API_KEY is not configured on the backend server. Add GEMINI_API_KEY to apps/node_backend/.env (or enter your key in the prompt) to generate live flashcards with Gemini AI.',
+    };
+  }
+  if (overrideApiKey && overrideApiKey.trim()) {
+    process.env.GEMINI_API_KEY = overrideApiKey.trim();
+  }
+
+  const requestedCount = Math.min(25, Math.max(3, payload.count || 6));
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+
+  const contextText = buildFlashcardsPromptContext(payload);
+  const systemInstruction = `You are Chalk AI, an elite university pedagogy expert specializing in spaced repetition and active recall.
+Your job is to generate exactly ${requestedCount} high-yield, academically rigorous study flashcards for university students enrolled in:
+"${payload.courseTitle || payload.courseCode || 'University Course'}" (${payload.courseCode || payload.courseId}).
+
+IMPORTANT GUIDELINES:
+1. Base the flashcards directly on the provided course material (lecture notes, syllabus modules, classwork materials, assignments, lecturer announcements, and transcripts).
+2. Avoid generic or trivial trivia. Formulate deep, testable questions covering definitions, edge cases, theorems, formulas, algorithmic invariants, and conceptual trade-offs.
+3. Every card must have:
+   - "topic": A concise module or topic name (e.g. "Graph Invariants", "Memory Layout", "Parsing").
+   - "front": An engaging, unambiguous prompt or question requiring active recall (e.g., "Why does...", "State the invariant...", "Compare X and Y in terms of...").
+   - "back": A clear, accurate, and comprehensive explanation or derivation answering the question. You may include concise markdown formulas or bullet points where appropriate.
+   - "hint": A brief, helpful clue or mnemonic to assist recall without giving away the full answer.
+4. Return ONLY valid JSON matching the schema with a "flashcards" array.`;
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Generate ${requestedCount} active-recall study flashcards based on the following course materials:\n\n${contextText}`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.35,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              flashcards: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    topic: { type: 'STRING' },
+                    front: { type: 'STRING' },
+                    back: { type: 'STRING' },
+                    hint: { type: 'STRING' },
+                  },
+                  required: ['topic', 'front', 'back'],
+                },
+              },
+            },
+            required: ['flashcards'],
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn(`[Chalk AI Flashcards] Model ${model} returned HTTP ${response.status}: ${errText.slice(0, 160)}`);
+      return {
+        errorCode: 'GEMINI_API_ERROR',
+        error: `AI service returned HTTP ${response.status}. Please verify your API key.`,
+      };
+    }
+
+    const json = (await response.json()) as any;
+    const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText || typeof rawText !== 'string') {
+      return {
+        errorCode: 'GEMINI_EMPTY_RESPONSE',
+        error: 'AI service returned an empty response.',
+      };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      const match = rawText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      }
+    }
+
+    const rawList = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.flashcards)
+        ? parsed.flashcards
+        : [];
+
+    const now = Date.now();
+    const flashcards: FlashcardItem[] = rawList
+      .map((c: any, idx: number) => ({
+        id: `fc_ai_${now}_${idx + 1}`,
+        courseId: payload.courseId,
+        topic: sanitizeDisplayText(c?.topic, 80) || payload.courseCode || 'Core Concept',
+        front: sanitizeMultilineText(c?.front, 600) || '',
+        back: sanitizeMultilineText(c?.back, 2000) || '',
+        hint: sanitizeDisplayText(c?.hint, 300) || undefined,
+      }))
+      .filter((c: FlashcardItem) => c.front && c.back);
+
+    if (flashcards.length > 0) {
+      return { flashcards };
+    }
+  } catch (err: any) {
+    console.warn(`[Chalk AI Flashcards] Exception testing ${model}:`, err?.message);
+  }
+
+  return {
+    errorCode: 'GEMINI_REQUEST_FAILED',
+    error: 'Failed to generate flashcards. Please check network connectivity and your API key.',
   };
 };
 
@@ -650,19 +1556,32 @@ app.post('/api/auth/verify', strictMutationLimiter, async (req, res) => {
   }
 
   const existingDoc = getFirestoreDocument('users', verifiedUser.uid);
-  const isNewUser = !existingDoc || !existingDoc.isProfileComplete;
+  const existingMatric =
+    typeof existingDoc?.matricOrStaffId === 'string'
+      ? existingDoc.matricOrStaffId.trim()
+      : '';
+  const isExistingComplete = Boolean(
+    existingDoc?.isProfileComplete || Boolean(existingMatric)
+  );
+  const reqMatric =
+    typeof req.body?.matricOrStaffId === 'string'
+      ? req.body.matricOrStaffId.trim()
+      : '';
+  const isProfileComplete = Boolean(
+    isExistingComplete ||
+      req.body?.isProfileComplete === true ||
+      Boolean(reqMatric)
+  );
+  const isNewUser = !isProfileComplete;
 
   const savedProfile = await saveUserToFirestore(verifiedUser.uid, {
-    name: req.body?.name || verifiedUser.name,
-    email: verifiedUser.email || req.body?.email,
-    role: req.body?.role || verifiedUser.role,
-    department: req.body?.department || verifiedUser.department,
-    matricOrStaffId: req.body?.matricOrStaffId || verifiedUser.matricOrStaffId,
-    avatarTag: req.body?.avatarTag || verifiedUser.avatarTag,
-    isProfileComplete:
-      typeof req.body?.isProfileComplete === 'boolean'
-        ? req.body.isProfileComplete
-        : Boolean(existingDoc?.isProfileComplete),
+    name: req.body?.name || existingDoc?.name || verifiedUser.name,
+    email: verifiedUser.email || req.body?.email || existingDoc?.email,
+    role: existingDoc?.role || req.body?.role || verifiedUser.role,
+    department: existingDoc?.department || req.body?.department || verifiedUser.department,
+    matricOrStaffId: existingMatric || reqMatric || verifiedUser.matricOrStaffId,
+    avatarTag: existingDoc?.avatarTag || req.body?.avatarTag || verifiedUser.avatarTag,
+    isProfileComplete,
   });
 
   res.json({
@@ -731,16 +1650,33 @@ app.post(
   strictMutationLimiter,
   requireFirebaseAuth,
   async (req: AuthenticatedRequest, res) => {
-    if (!req.user || req.user.role !== 'lecturer') {
+    const isClientLecturer =
+      req.user?.role === 'lecturer' || req.body?.role === 'lecturer';
+    if (!req.user || !isClientLecturer) {
       res.status(403).json({ error: 'Only lecturers can create courses' });
       return;
     }
+
+    if (req.user.role !== 'lecturer') {
+      req.user.role = 'lecturer';
+      await saveUserToFirestore(req.user.uid, {
+        name: req.body?.lecturerName || req.user.name,
+        email: req.user.email,
+        role: 'lecturer',
+        department: req.body?.department || req.user.department,
+        isProfileComplete: true,
+      });
+    }
+
     const code = sanitizeDisplayText(req.body?.code, 16).toUpperCase();
     const title = sanitizeDisplayText(req.body?.title, 96);
     const scheduleTime =
       sanitizeDisplayText(req.body?.scheduleTime, 64) || 'Schedule to be announced';
     const department =
       sanitizeDisplayText(req.body?.department, 80) || req.user.department || 'General';
+    const section = sanitizeDisplayText(req.body?.section, 48);
+    const room = sanitizeDisplayText(req.body?.room, 48);
+    const subject = sanitizeDisplayText(req.body?.subject, 64);
 
     if (!code || !title) {
       res.status(400).json({ error: 'Course code and title are required' });
@@ -755,24 +1691,151 @@ app.post(
       sanitizeRoomOrEntityId(req.body?.liveRoomCode) ||
       `${slug}-${crypto.randomBytes(3).toString('hex')}`;
 
-    const courseData = {
+    const lecturerId =
+      sanitizeUserId(req.body?.lecturerId) || req.user.uid;
+    const lecturerName =
+      sanitizeDisplayText(req.body?.lecturerName, 64) ||
+      req.user.name ||
+      'Lecturer';
+
+    const existing = getFirestoreDocument('courses', id);
+    const existingMemberIds = Array.isArray(existing?.memberIds)
+      ? (existing.memberIds as string[])
+      : Array.isArray(req.body?.memberIds)
+        ? (req.body.memberIds as string[])
+        : [];
+    const lecturerMember = toCourseMember({
+      ...req.user,
+      uid: lecturerId,
+      name: lecturerName,
+      role: 'lecturer',
+    });
+    const existingMembers = Array.isArray(existing?.members)
+      ? (existing.members as Record<string, unknown>[])
+      : Array.isArray(req.body?.members)
+        ? (req.body.members as Record<string, unknown>[])
+        : [lecturerMember];
+    const hasLecturerInMembers = existingMembers.some(
+      (m) => String(m?.id || '').toLowerCase() === lecturerId.toLowerCase()
+    );
+    const mergedMembers = hasLecturerInMembers
+      ? existingMembers
+      : [lecturerMember, ...existingMembers];
+
+    const courseData: Record<string, unknown> = {
       id,
       code,
       title,
-      lecturerName: req.user.name || 'Lecturer',
-      lecturerId: req.user.uid,
-      accentHex: '#059669',
+      lecturerName,
+      lecturerId,
+      accentHex: sanitizeDisplayText(req.body?.accentHex, 12) || '#059669',
       hasLiveSession: true,
       liveRoomCode,
-      enrolledCount: 0,
-      memberIds: [] as string[],
-      members: [] as Record<string, unknown>[],
+      enrolledCount:
+        typeof existing?.enrolledCount === 'number'
+          ? existing.enrolledCount
+          : existingMemberIds.length,
+      memberIds: existingMemberIds,
+      members: mergedMembers,
       scheduleTime,
       department,
+      ...(section ? { section } : {}),
+      ...(room ? { room } : {}),
+      ...(subject ? { subject } : {}),
+      isArchived: Boolean(req.body?.isArchived ?? existing?.isArchived ?? false),
     };
 
     const saved = await upsertFirestoreDocument('courses', id, courseData);
     res.status(201).json({ success: true, course: saved });
+  }
+);
+
+app.patch(
+  '/api/courses/:courseId/settings',
+  strictMutationLimiter,
+  requireFirebaseAuth,
+  async (req: AuthenticatedRequest, res) => {
+    const courseId = sanitizeRoomOrEntityId(req.params.courseId);
+    if (!courseId || !req.user) {
+      res.status(400).json({ error: 'Valid courseId is required' });
+      return;
+    }
+    const existing = getFirestoreDocument('courses', courseId);
+    if (!existing) {
+      res.status(404).json({ error: 'Course not found' });
+      return;
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (typeof req.body?.title === 'string' && req.body.title.trim()) {
+      updates.title = sanitizeDisplayText(req.body.title, 96);
+    }
+    if (typeof req.body?.scheduleTime === 'string') {
+      updates.scheduleTime = sanitizeDisplayText(req.body.scheduleTime, 64);
+    }
+    if (typeof req.body?.section === 'string') {
+      updates.section = sanitizeDisplayText(req.body.section, 48);
+    }
+    if (typeof req.body?.room === 'string') {
+      updates.room = sanitizeDisplayText(req.body.room, 48);
+    }
+    if (typeof req.body?.subject === 'string') {
+      updates.subject = sanitizeDisplayText(req.body.subject, 64);
+    }
+    if (typeof req.body?.themeColor === 'string') {
+      updates.themeColor = sanitizeDisplayText(req.body.themeColor, 16);
+      updates.accentHex = updates.themeColor;
+    }
+    if (typeof req.body?.isArchived === 'boolean') {
+      updates.isArchived = req.body.isArchived;
+    }
+    if (Array.isArray(req.body?.memberIds)) {
+      updates.memberIds = req.body.memberIds;
+    }
+    if (Array.isArray(req.body?.members)) {
+      updates.members = req.body.members;
+    }
+    if (typeof req.body?.enrolledCount === 'number') {
+      updates.enrolledCount = req.body.enrolledCount;
+    }
+
+    const saved = await upsertFirestoreDocument('courses', courseId, {
+      ...existing,
+      ...updates,
+    });
+    res.json({ success: true, course: saved });
+  }
+);
+
+app.delete(
+  '/api/courses/:courseId',
+  strictMutationLimiter,
+  requireFirebaseAuth,
+  async (req: AuthenticatedRequest, res) => {
+    const courseId = sanitizeRoomOrEntityId(req.params.courseId);
+    if (!courseId || !req.user) {
+      res.status(400).json({ error: 'Valid courseId is required' });
+      return;
+    }
+    await deleteFirestoreDocument('courses', courseId);
+
+    // Also clean up announcements and assignments associated with the deleted course
+    const [allAnns, allAsgs] = await Promise.all([
+      listFirestoreCollection('announcements'),
+      listFirestoreCollection('assignments'),
+    ]);
+    for (const ann of allAnns) {
+      if (String(ann.courseId || '').toLowerCase() === courseId.toLowerCase() && typeof ann.id === 'string') {
+        await deleteFirestoreDocument('announcements', ann.id);
+      }
+    }
+    for (const asg of allAsgs) {
+      if (String(asg.courseId || '').toLowerCase() === courseId.toLowerCase() && typeof asg.id === 'string') {
+        await deleteFirestoreDocument('assignments', asg.id);
+      }
+    }
+
+    res.json({ success: true });
   }
 );
 
@@ -789,39 +1852,88 @@ app.post(
 
     const normalized = rawCode.toLowerCase().replace(/[^a-z0-9]/g, '');
     const allCourses = await listFirestoreCollection('courses');
-    const matched = allCourses.find(
-      (c) =>
-        String(c.id).toLowerCase() === rawCode.toLowerCase() ||
-        String(c.code).toLowerCase().replace(/[^a-z0-9]/g, '') === normalized ||
-        String(c.liveRoomCode).toLowerCase() === rawCode.toLowerCase()
-    );
+    // Sort active (non-archived) and most recently updated courses first
+    const sortedCourses = [...allCourses].sort((a, b) => {
+      const aArch = a.isArchived ? 1 : 0;
+      const bArch = b.isArchived ? 1 : 0;
+      if (aArch !== bArch) return aArch - bArch;
+      const aTime = String(a.updatedAt || '');
+      const bTime = String(b.updatedAt || '');
+      return bTime.localeCompare(aTime);
+    });
+
+    const matched =
+      sortedCourses.find(
+        (c) =>
+          String(c.id).toLowerCase() === rawCode.toLowerCase() ||
+          String(c.liveRoomCode).toLowerCase() === rawCode.toLowerCase()
+      ) ||
+      sortedCourses.find(
+        (c) =>
+          String(c.code).toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
+      );
 
     if (!matched) {
       res.status(404).json({ error: 'No course matches that code' });
       return;
     }
 
-    if (matched.lecturerId === req.user.uid) {
-      res.json({ success: true, course: matched });
-      return;
-    }
+    const studentId = sanitizeUserId(req.body?.studentId) || req.user.uid;
+    const studentName =
+      sanitizeDisplayText(req.body?.studentName, 64) ||
+      req.user.name ||
+      'Campus Student';
+    const studentAvatar =
+      sanitizeDisplayText(req.body?.avatarTag, 4) ||
+      req.user.avatarTag ||
+      deriveInitials(studentName);
+    const studentMatric =
+      sanitizeDisplayText(req.body?.matricOrStaffId, 40) ||
+      req.user.matricOrStaffId ||
+      '';
 
     const memberIds = Array.isArray(matched.memberIds)
       ? (matched.memberIds as string[])
       : [];
-    if (memberIds.includes(req.user.uid)) {
+    const members = Array.isArray(matched.members)
+      ? (matched.members as Record<string, unknown>[])
+      : [];
+
+    const alreadyInMemberIds = memberIds.some(
+      (id) => String(id).toLowerCase() === studentId.toLowerCase()
+    );
+    const alreadyInMembers = members.some(
+      (m) =>
+        String(m?.id || '').toLowerCase() === studentId.toLowerCase() &&
+        m?.role === 'student'
+    );
+
+    if (alreadyInMemberIds && alreadyInMembers) {
       res.json({ success: true, course: matched });
       return;
     }
 
-    const members = Array.isArray(matched.members)
-      ? (matched.members as Record<string, unknown>[])
-      : [];
+    const nextMemberIds = alreadyInMemberIds
+      ? memberIds
+      : [...memberIds, studentId];
+    const studentMemberObj = {
+      id: studentId,
+      name: studentName,
+      avatarTag: studentAvatar,
+      role: 'student',
+      matricOrStaffId: studentMatric,
+    };
+    const nextMembers = alreadyInMembers
+      ? members
+      : [...members, studentMemberObj];
+
+    const studentCount = nextMembers.filter((m) => m?.role === 'student').length;
+
     const updated = await upsertFirestoreDocument('courses', String(matched.id), {
       ...matched,
-      memberIds: [...memberIds, req.user.uid],
-      members: [...members, toCourseMember(req.user)],
-      enrolledCount: memberIds.length + 1,
+      memberIds: nextMemberIds,
+      members: nextMembers,
+      enrolledCount: Math.max(nextMemberIds.length, studentCount),
     });
 
     res.json({ success: true, course: updated });
@@ -969,36 +2081,199 @@ app.get('/api/rooms/:roomId', (req, res) => {
   res.json(summarizeRoom(room));
 });
 
-app.get('/api/rooms/:roomId/catch-up', (req, res) => {
+app.post('/api/rooms/:roomId/end', strictMutationLimiter, async (req: Request, res: Response) => {
+  const safeRoomId = sanitizeRoomOrEntityId(req.params.roomId);
+  if (!safeRoomId) {
+    res.status(400).json({ error: 'Invalid roomId parameter' });
+    return;
+  }
+  const room = rooms.get(safeRoomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found or already ended' });
+    return;
+  }
+  const endedBy = sanitizeDisplayText(req.body?.endedBy, 48) || room.lecturerName || 'Lecturer';
+  await endAndFinalizeRoom(safeRoomId, endedBy);
+  res.json({ success: true, message: 'Studio session ended successfully' });
+});
+
+app.get('/api/rooms/:roomId/catch-up', async (req, res) => {
   const safeRoomId = sanitizeRoomOrEntityId(req.params.roomId);
   if (!safeRoomId) {
     res.status(400).json({ error: 'Invalid roomId' });
     return;
   }
   const room = rooms.get(safeRoomId);
-  if (!room) {
-    res.status(404).json({ error: 'This room has no live session right now' });
-    return;
-  }
-  res.json(buildCatchUp(room));
+  const catchUpBase = buildCatchUp(room, undefined, safeRoomId);
+  const { aiSummary, aiError, aiErrorCode } = await callGeminiCatchUp(catchUpBase);
+  res.json({
+    ...catchUpBase,
+    ...(aiSummary ? { aiSummary } : {}),
+    ...(aiError ? { aiError, aiErrorCode } : {}),
+  });
 });
 
-app.get('/api/replays', requireFirebaseAuth, (_req, res) => {
-  const replays = Array.from(savedRecordings.values())
+app.post('/api/rooms/:roomId/catch-up', strictMutationLimiter, async (req, res) => {
+  const safeRoomId = sanitizeRoomOrEntityId(req.params.roomId);
+  if (!safeRoomId) {
+    res.status(400).json({ error: 'Invalid roomId' });
+    return;
+  }
+  const room = rooms.get(safeRoomId);
+  const clientSnap: ClientCatchUpSnapshot | undefined =
+    req.body && typeof req.body === 'object' ? (req.body as ClientCatchUpSnapshot) : undefined;
+  const overrideApiKey =
+    typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined;
+
+  const catchUpBase = buildCatchUp(room, clientSnap, safeRoomId);
+  const { aiSummary, aiError, aiErrorCode } = await callGeminiCatchUp(
+    catchUpBase,
+    overrideApiKey
+  );
+
+  res.json({
+    ...catchUpBase,
+    ...(aiSummary ? { aiSummary } : {}),
+    ...(aiError ? { aiError, aiErrorCode } : {}),
+  });
+});
+
+app.post('/api/rooms/:roomId/catch-up/ask', strictMutationLimiter, async (req, res) => {
+  const safeRoomId = sanitizeRoomOrEntityId(req.params.roomId);
+  if (!safeRoomId) {
+    res.status(400).json({ error: 'Invalid roomId' });
+    return;
+  }
+  const question = sanitizeMultilineText(req.body?.question, 600);
+  if (!question) {
+    res.status(400).json({ error: 'Question is required' });
+    return;
+  }
+  const room = rooms.get(safeRoomId);
+  const clientSnap: ClientCatchUpSnapshot | undefined =
+    req.body?.contextSnapshot && typeof req.body.contextSnapshot === 'object'
+      ? (req.body.contextSnapshot as ClientCatchUpSnapshot)
+      : undefined;
+  const history = Array.isArray(req.body?.history) ? req.body.history : [];
+  const overrideApiKey =
+    typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined;
+
+  const catchUpBase = buildCatchUp(room, clientSnap, safeRoomId);
+  const result = await callGeminiFollowUp(catchUpBase, question, history, overrideApiKey);
+  if (result.error) {
+    res.status(result.errorCode === 'GEMINI_API_KEY_MISSING' ? 400 : 502).json(result);
+    return;
+  }
+  res.json({
+    answer: result.answer,
+    elapsedMs: catchUpBase.elapsedMs,
+  });
+});
+
+app.get('/api/catch-up/sessions', requireFirebaseAuth, (_req, res) => {
+  const sessions = Array.from(savedRecordings.values())
     .sort((a, b) => (b.recordedAt || '').localeCompare(a.recordedAt || ''))
-    .map(recordingSummary);
-  res.json({ replays });
+    .map((rec) => ({
+      ...recordingSummary(rec),
+      ...(rec.aiSummary ? { aiSummary: rec.aiSummary } : {}),
+    }));
+  res.json({ sessions });
 });
 
-app.get('/api/replays/:recordingId', requireFirebaseAuth, (req, res) => {
-  const safeId = sanitizeRoomOrEntityId(req.params.recordingId);
-  const recording = safeId ? savedRecordings.get(safeId) : undefined;
-  if (!recording) {
-    res.status(404).json({ error: 'Recording not found' });
-    return;
+app.post(
+  '/api/catch-up/sessions/:sessionId/synthesize',
+  strictMutationLimiter,
+  requireFirebaseAuth,
+  async (req, res) => {
+    const safeId = sanitizeRoomOrEntityId(req.params.sessionId);
+    const recording = safeId ? savedRecordings.get(safeId) : undefined;
+    const clientSnap: ClientCatchUpSnapshot | undefined =
+      req.body?.sessionSnapshot && typeof req.body.sessionSnapshot === 'object'
+        ? (req.body.sessionSnapshot as ClientCatchUpSnapshot)
+        : undefined;
+
+    if (!recording && !clientSnap) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const overrideApiKey =
+      typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined;
+    const catchUpBase = recording
+      ? buildCatchUpFromRecording(recording)
+      : buildCatchUp(undefined, clientSnap, safeId || 'studio');
+    if (req.body?.courseContext && typeof req.body.courseContext === 'object') {
+      catchUpBase.courseContext = req.body.courseContext;
+    }
+
+    const { aiSummary, aiError, aiErrorCode } = await callGeminiCatchUp(
+      catchUpBase,
+      overrideApiKey
+    );
+
+    if (aiSummary && recording) {
+      recording.aiSummary = aiSummary;
+      savedRecordings.set(recording.id, recording);
+      upsertFirestoreDocument(
+        'replays',
+        recording.id,
+        recording as unknown as Record<string, unknown>
+      ).catch(() => {});
+    }
+
+    res.json({
+      ...catchUpBase,
+      ...(aiSummary ? { aiSummary } : {}),
+      ...(aiError ? { aiError, aiErrorCode } : {}),
+    });
   }
-  res.json({ replay: recording });
-});
+);
+
+app.post(
+  '/api/catch-up/sessions/:sessionId/ask',
+  strictMutationLimiter,
+  requireFirebaseAuth,
+  async (req, res) => {
+    const safeId = sanitizeRoomOrEntityId(req.params.sessionId);
+    const recording = safeId ? savedRecordings.get(safeId) : undefined;
+    const clientSnap: ClientCatchUpSnapshot | undefined =
+      req.body?.sessionSnapshot && typeof req.body.sessionSnapshot === 'object'
+        ? (req.body.sessionSnapshot as ClientCatchUpSnapshot)
+        : undefined;
+
+    if (!recording && !clientSnap) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const question = sanitizeMultilineText(req.body?.question, 600);
+    if (!question) {
+      res.status(400).json({ error: 'Question is required' });
+      return;
+    }
+
+    const history = Array.isArray(req.body?.history) ? req.body.history : [];
+    const overrideApiKey =
+      typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined;
+
+    const catchUpBase = recording
+      ? buildCatchUpFromRecording(recording)
+      : buildCatchUp(undefined, clientSnap, safeId || 'studio');
+    if (req.body?.courseContext && typeof req.body.courseContext === 'object') {
+      catchUpBase.courseContext = req.body.courseContext;
+    }
+
+    const result = await callGeminiFollowUp(catchUpBase, question, history, overrideApiKey);
+    if (result.error) {
+      res.status(result.errorCode === 'GEMINI_API_KEY_MISSING' ? 400 : 502).json(result);
+      return;
+    }
+    res.json({
+      answer: result.answer,
+      elapsedMs: catchUpBase.elapsedMs,
+    });
+  }
+);
 
 app.post(
   '/api/database/sync-room',
@@ -1258,6 +2533,120 @@ app.post(
   }
 );
 
+// 10. Flashcard Generation (Gemini AI based on course material) & Course Deck Endpoints
+app.post(
+  '/api/ai/flashcards/generate',
+  strictMutationLimiter,
+  async (req: Request, res: Response) => {
+    const courseId = sanitizeRoomOrEntityId(req.body?.courseId);
+    if (!courseId) {
+      res.status(400).json({ error: 'courseId is required' });
+      return;
+    }
+
+    // Pull server-side materials if available from Firestore
+    const courseDoc = getFirestoreDocument('courses', courseId);
+    const allAssignments = await listFirestoreCollection('assignments');
+    const serverMaterials = allAssignments.filter(
+      (a) => String(a.courseId || '').toLowerCase() === courseId.toLowerCase()
+    );
+    const allAnnouncements = await listFirestoreCollection('announcements');
+    const serverAnnouncements = allAnnouncements
+      .filter((a) => String(a.courseId || '').toLowerCase() === courseId.toLowerCase())
+      .map((a) => (typeof a.content === 'string' ? a.content : ''))
+      .filter(Boolean);
+
+    const payload: GenerateFlashcardsPayload = {
+      courseId,
+      courseCode: sanitizeDisplayText(req.body?.courseCode || courseDoc?.code, 24) || courseId.toUpperCase(),
+      courseTitle: sanitizeDisplayText(req.body?.courseTitle || courseDoc?.title, 140) || 'Academic Course',
+      department: sanitizeDisplayText(req.body?.department || courseDoc?.department, 100),
+      topics: Array.isArray(req.body?.topics)
+        ? req.body.topics.map((t: any) => sanitizeDisplayText(String(t), 120))
+        : [],
+      notes: sanitizeMultilineText(req.body?.notes, 20_000) || (typeof courseDoc?.notes === 'string' ? courseDoc.notes : ''),
+      materials: Array.isArray(req.body?.materials) && req.body.materials.length > 0
+        ? req.body.materials.map((m: any) => ({
+            title: sanitizeDisplayText(m.title, 140),
+            description: sanitizeMultilineText(m.description, 500),
+            type: sanitizeDisplayText(m.type, 24) || 'material',
+          }))
+        : serverMaterials.map((m) => ({
+            title: sanitizeDisplayText(m.title, 140),
+            description: sanitizeMultilineText(m.description, 500),
+            type: sanitizeDisplayText(m.type, 24) || 'material',
+          })),
+      announcements: Array.isArray(req.body?.announcements) && req.body.announcements.length > 0
+        ? req.body.announcements.map((a: any) => sanitizeMultilineText(String(a), 400))
+        : serverAnnouncements,
+      transcripts: Array.isArray(req.body?.transcripts)
+        ? req.body.transcripts.map((t: any) => sanitizeMultilineText(String(t), 600))
+        : [],
+      userPrompt: sanitizeMultilineText(req.body?.userPrompt, 400),
+      count: typeof req.body?.count === 'number' ? req.body.count : undefined,
+      geminiApiKey: typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined,
+    };
+
+    const overrideApiKey =
+      typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : undefined;
+
+    const result = await callGeminiGenerateFlashcards(payload, overrideApiKey);
+    if (result.error) {
+      res.status(result.errorCode === 'GEMINI_API_KEY_MISSING' ? 400 : 502).json(result);
+      return;
+    }
+
+    res.json({
+      success: true,
+      flashcards: result.flashcards || [],
+      modelUsed: result.modelUsed,
+    });
+  }
+);
+
+app.get('/api/courses/:courseId/flashcards', async (req: Request, res: Response) => {
+  const courseId = sanitizeRoomOrEntityId(req.params.courseId);
+  if (!courseId) {
+    res.status(400).json({ error: 'Invalid courseId' });
+    return;
+  }
+  const doc = getFirestoreDocument('flashcards', `fc_${courseId}`);
+  const flashcards = Array.isArray(doc?.flashcards) ? doc.flashcards : [];
+  res.json({ flashcards });
+});
+
+app.post(
+  '/api/courses/:courseId/flashcards',
+  strictMutationLimiter,
+  async (req: Request, res: Response) => {
+    const courseId = sanitizeRoomOrEntityId(req.params.courseId);
+    if (!courseId) {
+      res.status(400).json({ error: 'Invalid courseId' });
+      return;
+    }
+    const cards = Array.isArray(req.body?.flashcards) ? req.body.flashcards : [];
+    const sanitizedCards: FlashcardItem[] = cards
+      .slice(0, 100)
+      .map((c: any, idx: number) => ({
+        id: sanitizeRoomOrEntityId(c.id) || `fc_${courseId}_${Date.now()}_${idx + 1}`,
+        courseId,
+        topic: sanitizeDisplayText(c.topic, 80) || 'Topic',
+        front: sanitizeMultilineText(c.front, 600) || '',
+        back: sanitizeMultilineText(c.back, 2000) || '',
+        hint: sanitizeDisplayText(c.hint, 300) || undefined,
+      }))
+      .filter((c: FlashcardItem) => c.front && c.back);
+
+    await upsertFirestoreDocument('flashcards', `fc_${courseId}`, {
+      courseId,
+      flashcards: sanitizedCards,
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({ success: true, count: sanitizedCards.length, flashcards: sanitizedCards });
+  }
+);
+
 // Global Express Error Handler (prevents stack trace leakage)
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   if (err.message?.includes('CORS')) {
@@ -1269,7 +2658,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 // --- Real-time Socket.io Meeting Signaling (Hardened + Firestore Synced) ---
 
-const socketTelemetryLimiter = new SlidingWindowRateLimiter(60, 1_000); // 60 events/sec per socket
+const socketTelemetryLimiter = new SlidingWindowRateLimiter(180, 1_000); // 180 events/sec per socket
 const socketControlLimiter = new SlidingWindowRateLimiter(40, 60_000); // 40 control actions/min per socket
 const socketStatusLimiter = new SlidingWindowRateLimiter(40, 60_000); // mute / hand toggles
 const socketChatLimiter = new SlidingWindowRateLimiter(10, 10_000); // 10 messages / 10s
@@ -1294,6 +2683,26 @@ io.on('connection', (socket: Socket) => {
 
   const findSelf = (room: RoomState) =>
     room.participants.find((p) => p.socketId === socket.id);
+
+  const resolveJoinedRoomId = (rawRoomId: unknown): string | null => {
+    const sanitized = sanitizeRoomOrEntityId(rawRoomId);
+    if (sanitized && joinedRooms.has(sanitized)) return sanitized;
+    return Array.from(joinedRooms)[0] || null;
+  };
+
+  const canUseChalkboard = (room: RoomState): boolean => {
+    const self = findSelf(room);
+    return Boolean(
+      room.id === TRIAL_ROOM_ID ||
+      room.useChalkboardAllowed ||
+      socketUser.role === 'lecturer' ||
+      self?.role === 'lecturer' ||
+      self?.canDraw ||
+      (Boolean(self?.name) && room.lecturerName?.toLowerCase() === self?.name?.toLowerCase()) ||
+      room.participants[0]?.socketId === socket.id ||
+      !hasLecturerPresent(room)
+    );
+  };
 
   const leaveRoom = (roomId: string) => {
     joinedRooms.delete(roomId);
@@ -1351,8 +2760,11 @@ io.on('connection', (socket: Socket) => {
       const metaTitle = sanitizeDisplayText(raw.title, 96);
       const metaCourseCode = sanitizeDisplayText(raw.courseCode, 16);
       const metaLecturer = sanitizeDisplayText(raw.lecturerName, 64);
+      const metaLecturerId = sanitizeRoomOrEntityId(raw.lecturerId) || (role === 'lecturer' ? userId : undefined);
       const metaCourseId = sanitizeRoomOrEntityId(raw.courseId) || undefined;
       const persistedTotal = Number(persistedRoom?.totalSlides);
+      const persistedHostUserId = typeof persistedRoom?.hostUserId === 'string' ? persistedRoom.hostUserId : undefined;
+      const persistedLecturerId = typeof persistedRoom?.lecturerId === 'string' ? persistedRoom.lecturerId : undefined;
       room = {
         id: safeRoomId,
         title:
@@ -1363,19 +2775,16 @@ io.on('connection', (socket: Socket) => {
           metaLecturer ||
           (typeof persistedRoom?.lecturerName === 'string' ? persistedRoom.lecturerName : '') ||
           (role === 'lecturer' ? userName : ''),
+        hostUserId: role === 'lecturer' ? userId : persistedHostUserId,
+        lecturerId: metaLecturerId || persistedLecturerId,
         courseCode:
           metaCourseCode ||
           (typeof persistedRoom?.courseCode === 'string' ? persistedRoom.courseCode : ''),
         courseId:
           metaCourseId ||
           (typeof persistedRoom?.courseId === 'string' ? persistedRoom.courseId : undefined),
-        strokes: Array.isArray(persistedRoom?.strokes)
-          ? (persistedRoom.strokes as RoomState['strokes'])
-          : [],
-        activeSlideIndex:
-          typeof persistedRoom?.activeSlideIndex === 'number'
-            ? persistedRoom.activeSlideIndex
-            : 0,
+        strokes: [],
+        activeSlideIndex: 0,
         totalSlides:
           Number.isInteger(persistedTotal) && persistedTotal > 0 && persistedTotal <= MAX_TOTAL_SLIDES
             ? persistedTotal
@@ -1385,6 +2794,9 @@ io.on('connection', (socket: Socket) => {
         sessionStartedAt: Date.now(),
         participants: [],
         chat: [],
+        transcript: [],
+        polls: [],
+        questions: [],
         attendeeIds: [],
         peakParticipants: 0,
       };
@@ -1393,7 +2805,12 @@ io.on('connection', (socket: Socket) => {
 
     if (!activeDvrSessions.has(safeRoomId)) {
       room.sessionStartedAt = Date.now();
+      room.strokes = [];
+      room.activeSlideIndex = 0;
       room.chat = [];
+      room.transcript = [];
+      room.polls = [];
+      room.questions = [];
       room.attendeeIds = [];
       room.peakParticipants = 0;
       activeDvrSessions.set(safeRoomId, {
@@ -1402,7 +2819,7 @@ io.on('connection', (socket: Socket) => {
           {
             t: 0,
             type: 'snapshot',
-            data: { strokes: room.strokes, activeSlideIndex: room.activeSlideIndex },
+            data: { strokes: [], activeSlideIndex: 0 },
           },
         ],
       });
@@ -1414,9 +2831,15 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
-    // A lecturer joining a room without a named lecturer becomes its host
-    if (role === 'lecturer' && !room.lecturerName) {
-      room.lecturerName = userName;
+    // A lecturer joining a room without a named lecturer or host becomes its host
+    if (role === 'lecturer') {
+      if (!room.hostUserId) room.hostUserId = userId;
+      if (!room.lecturerName) room.lecturerName = userName;
+      if (!room.lecturerId && raw.lecturerId) {
+        room.lecturerId = sanitizeRoomOrEntityId(raw.lecturerId) || undefined;
+      } else if (!room.lecturerId) {
+        room.lecturerId = userId;
+      }
     }
 
     socket.join(safeRoomId);
@@ -1455,6 +2878,8 @@ io.on('connection', (socket: Socket) => {
       courseCode: room.courseCode,
       courseId: room.courseId || null,
       lecturerName: room.lecturerName,
+      hostUserId: room.hostUserId || null,
+      lecturerId: room.lecturerId || null,
       stageLayout: room.stageLayout || 'tiled',
       strokes: room.strokes,
       activeSlideIndex: room.activeSlideIndex,
@@ -1463,6 +2888,9 @@ io.on('connection', (socket: Socket) => {
       sessionStartedAt: room.sessionStartedAt,
       participants: room.participants,
       chat: room.chat,
+      transcript: room.transcript || [],
+      polls: room.polls || [],
+      questions: room.questions || [],
     });
 
     broadcastParticipants(room);
@@ -1502,25 +2930,26 @@ io.on('connection', (socket: Socket) => {
     if (!socketTelemetryLimiter.allow(socket.id).allowed) {
       return;
     }
+    if (!rawStroke || typeof rawStroke !== 'object') return;
+    const rawObj = rawStroke as Record<string, unknown>;
+    const effectiveRoomId = resolveJoinedRoomId(rawObj.roomId);
+    if (!effectiveRoomId) return;
 
-    const cleanStroke = validateAndSanitizeStroke(rawStroke, {
-      userId: socketUser.uid,
-      userName:
-        (() => {
-          const room = rooms.get(String((rawStroke as Record<string, unknown>)?.roomId));
-          return room ? findSelf(room)?.name : undefined;
-        })() ||
-        socketUser.name ||
-        'Campus User',
-    });
+    const room = rooms.get(effectiveRoomId);
+    const cleanStroke = validateAndSanitizeStroke(
+      { ...rawObj, roomId: effectiveRoomId },
+      {
+        userId: socketUser.uid,
+        userName:
+          (room && findSelf(room)?.name) ||
+          socketUser.name ||
+          'Campus User',
+      }
+    );
     if (!cleanStroke) return;
 
-    if (!joinedRooms.has(cleanStroke.roomId)) return;
-
-    const room = rooms.get(cleanStroke.roomId);
     if (room) {
-      const self = findSelf(room);
-      if (self && self.role !== 'lecturer' && !self.canDraw) {
+      if (!canUseChalkboard(room)) {
         return;
       }
       if (typeof cleanStroke.slideIndex === 'number' && cleanStroke.slideIndex >= room.totalSlides) {
@@ -1531,8 +2960,10 @@ io.on('connection', (socket: Socket) => {
       if (room.strokes.length > MAX_STROKES_PER_ROOM) {
         room.strokes.shift();
       }
-      pushDvrEvent(cleanStroke.roomId, 'stroke', cleanStroke);
-      persistRoom(room);
+      if (cleanStroke.isComplete !== false) {
+        pushDvrEvent(cleanStroke.roomId, 'stroke', cleanStroke);
+        persistRoom(room);
+      }
     }
 
     socket.to(cleanStroke.roomId).emit('stroke_delta', cleanStroke);
@@ -1543,16 +2974,15 @@ io.on('connection', (socket: Socket) => {
     if (!socketTelemetryLimiter.allow(socket.id).allowed) return;
     if (!payload || typeof payload !== 'object') return;
     const raw = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId);
+    const safeRoomId = resolveJoinedRoomId(raw.roomId);
     const strokeId = sanitizeRoomOrEntityId(raw.strokeId);
-    if (!safeRoomId || !strokeId || !joinedRooms.has(safeRoomId)) return;
+    if (!safeRoomId || !strokeId) return;
 
     const room = rooms.get(safeRoomId);
     if (!room) return;
     const stroke = room.strokes.find((s) => s.id === strokeId);
     if (!stroke) return;
-    const isLecturer = !socketUser.isGuest && socketUser.role === 'lecturer';
-    if (stroke.userId !== socketUser.uid && !isLecturer) return;
+    if (stroke.userId !== socketUser.uid && !canUseChalkboard(room)) return;
 
     room.strokes = room.strokes.filter((s) => s.id !== strokeId);
     pushDvrEvent(safeRoomId, 'remove', { strokeId });
@@ -1565,15 +2995,20 @@ io.on('connection', (socket: Socket) => {
     if (!socketTelemetryLimiter.allow(socket.id).allowed) {
       return;
     }
+    if (!rawLaser || typeof rawLaser !== 'object') return;
+    const rawObj = rawLaser as Record<string, unknown>;
+    const effectiveRoomId = resolveJoinedRoomId(rawObj.roomId);
+    if (!effectiveRoomId) return;
 
-    const room = rooms.get(String((rawLaser as Record<string, unknown>)?.roomId));
-    const cleanLaser = validateAndSanitizeLaser(rawLaser, {
-      userId: socketUser.uid,
-      userName: (room && findSelf(room)?.name) || socketUser.name || 'Campus User',
-    });
+    const room = rooms.get(effectiveRoomId);
+    const cleanLaser = validateAndSanitizeLaser(
+      { ...rawObj, roomId: effectiveRoomId },
+      {
+        userId: socketUser.uid,
+        userName: (room && findSelf(room)?.name) || socketUser.name || 'Campus User',
+      }
+    );
     if (!cleanLaser) return;
-
-    if (!joinedRooms.has(cleanLaser.roomId)) return;
 
     socket.to(cleanLaser.roomId).emit('laser_pointer', cleanLaser);
   });
@@ -1584,17 +3019,14 @@ io.on('connection', (socket: Socket) => {
     if (!payload || typeof payload !== 'object') return;
 
     const raw = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId);
-    if (!safeRoomId || !joinedRooms.has(safeRoomId)) return;
+    const safeRoomId = resolveJoinedRoomId(raw.roomId);
+    if (!safeRoomId) return;
 
-    if (socketUser.isGuest && safeRoomId !== TRIAL_ROOM_ID) {
-      socket.emit('error_notice', {
-        error: 'Guest users cannot wipe an active course board.',
-      });
+    const room = rooms.get(safeRoomId);
+    if (room && !canUseChalkboard(room)) {
       return;
     }
 
-    const room = rooms.get(safeRoomId);
     if (room) {
       room.strokes = [];
       pushDvrEvent(safeRoomId, 'clear', { clearedBy: socketUser.uid });
@@ -1603,15 +3035,15 @@ io.on('connection', (socket: Socket) => {
     socket.to(safeRoomId).emit('clear_canvas', { userId: socketUser.uid });
   });
 
-  // Board page navigation. When a lecturer is present only lecturers may page.
+  // Board page navigation. When a lecturer is present only authorized board users may page.
   // Navigating to index === totalSlides appends a fresh page.
   socket.on('change_slide', (payload: unknown) => {
     if (!socketControlLimiter.allow(socket.id).allowed) return;
     if (!payload || typeof payload !== 'object') return;
 
     const raw = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId);
-    if (!safeRoomId || !joinedRooms.has(safeRoomId)) return;
+    const safeRoomId = resolveJoinedRoomId(raw.roomId);
+    if (!safeRoomId) return;
 
     const slideIndex = Number(raw.slideIndex);
     if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= MAX_TOTAL_SLIDES) {
@@ -1620,8 +3052,7 @@ io.on('connection', (socket: Socket) => {
 
     const room = rooms.get(safeRoomId);
     if (!room) return;
-    const self = findSelf(room);
-    if (hasLecturerPresent(room) && self?.role !== 'lecturer' && !self?.canDraw) {
+    if (hasLecturerPresent(room) && !canUseChalkboard(room)) {
       socket.emit('change_slide', {
         slideIndex: room.activeSlideIndex,
         totalSlides: room.totalSlides,
@@ -1696,13 +3127,31 @@ io.on('connection', (socket: Socket) => {
     if (!socketStatusLimiter.allow(socket.id).allowed) return;
     if (!payload || typeof payload !== 'object') return;
     const raw = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId);
-    if (!safeRoomId || !joinedRooms.has(safeRoomId)) return;
+    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId) || Array.from(joinedRooms)[0];
+    if (!safeRoomId) return;
     const room = rooms.get(safeRoomId);
-    if (!room || findSelf(room)?.role !== 'lecturer') return;
-    const target = room.participants.find((p) => p.socketId === raw.socketId);
-    if (!target) return;
-    target.handRaised = false;
+    if (!room) return;
+    const self = findSelf(room);
+    const isLecturer =
+      socketUser.role === 'lecturer' ||
+      self?.role === 'lecturer' ||
+      (Boolean(self?.name) && room.lecturerName?.toLowerCase() === self?.name?.toLowerCase()) ||
+      room.participants[0]?.socketId === socket.id ||
+      !hasLecturerPresent(room);
+    if (!isLecturer) return;
+    const target = room.participants.find(
+      (p) =>
+        p.socketId === raw.socketId ||
+        p.id === raw.socketId ||
+        (raw.userId && (p.id === raw.userId || p.socketId === raw.userId))
+    );
+    if (target) {
+      target.handRaised = false;
+    }
+    io.to(room.id).emit('hand_lowered', {
+      socketId: target?.socketId || raw.socketId,
+      userId: target?.id || raw.userId || raw.socketId,
+    });
     broadcastParticipants(room);
   });
 
@@ -1830,25 +3279,107 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // Live Speech Transcript / Captions Stream (accumulated from 00:00 for Catch Me Up AI)
+  socket.on('caption_stream', (payload: unknown) => {
+    if (!socketTelemetryLimiter.allow(socket.id).allowed) return;
+    if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
+    const safeRoomId = resolveJoinedRoomId(raw.roomId);
+    if (!safeRoomId) return;
+
+    const text = sanitizeMultilineText(raw.text, 600);
+    if (!text) return;
+
+    const room = rooms.get(safeRoomId);
+    if (!room) return;
+    const self = findSelf(room);
+    const now = Date.now();
+    const dvr = activeDvrSessions.get(safeRoomId);
+    const startTime = dvr?.startTime ?? room.sessionStartedAt;
+    const entry: TranscriptEntry = {
+      id:
+        sanitizeRoomOrEntityId(raw.id) ||
+        `tr_${now.toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+      roomId: safeRoomId,
+      speakerId: socketUser.uid,
+      speakerName:
+        sanitizeDisplayText(raw.speaker || raw.speakerName, 48) ||
+        self?.name ||
+        socketUser.name ||
+        'Speaker',
+      speakerRole:
+        raw.speakerRole === 'lecturer' || self?.role === 'lecturer' ? 'lecturer' : 'student',
+      text,
+      timestamp: now,
+      offsetMs: Math.max(0, now - startTime),
+    };
+
+    if (!Array.isArray(room.transcript)) room.transcript = [];
+    room.transcript.push(entry);
+    if (room.transcript.length > MAX_TRANSCRIPT_PER_ROOM) {
+      room.transcript.shift();
+    }
+    pushDvrEvent(safeRoomId, 'transcript', entry);
+    io.to(safeRoomId).emit('caption_stream', {
+      ...entry,
+      speaker: entry.speakerName,
+    });
+  });
+
   // Google Meet Polls
   socket.on('create_poll', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
     const poll = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(poll.roomId);
+    const safeRoomId = resolveJoinedRoomId(poll.roomId);
     if (!safeRoomId) return;
-    io.to(safeRoomId).emit('poll_update', [poll]);
+    const room = rooms.get(safeRoomId);
+    if (room) {
+      if (!Array.isArray(room.polls)) room.polls = [];
+      room.polls = [poll as unknown as StudioPoll, ...room.polls.filter((p) => p.id !== poll.id)].slice(0, 20);
+      pushDvrEvent(safeRoomId, 'poll', poll);
+      io.to(safeRoomId).emit('poll_update', room.polls);
+    } else {
+      io.to(safeRoomId).emit('poll_update', [poll]);
+    }
   });
 
   socket.on('vote_poll', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
     for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room && Array.isArray(room.polls)) {
+        const pollId = String(raw.pollId || '');
+        const optionId = String(raw.optionId || '');
+        const voterId = String(raw.userId || socketUser.uid);
+        room.polls = room.polls.map((p) => {
+          if (p.id !== pollId) return p;
+          const prevVote = p.voters?.[voterId];
+          const options = (p.options || []).map((o) => {
+            if (o.id === optionId) return { ...o, votes: o.votes + 1 };
+            if (o.id === prevVote) return { ...o, votes: Math.max(0, o.votes - 1) };
+            return o;
+          });
+          return {
+            ...p,
+            options,
+            voters: { ...(p.voters || {}), [voterId]: optionId },
+          };
+        });
+      }
       io.to(rId).emit('poll_voted', payload);
     }
   });
 
   socket.on('close_poll', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
     for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room && Array.isArray(room.polls)) {
+        const pollId = String(raw.pollId || '');
+        room.polls = room.polls.map((p) => (p.id === pollId ? { ...p, isOpen: false } : p));
+      }
       io.to(rId).emit('poll_closed', payload);
     }
   });
@@ -1857,21 +3388,51 @@ io.on('connection', (socket: Socket) => {
   socket.on('ask_question', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
     const q = payload as Record<string, unknown>;
-    const safeRoomId = sanitizeRoomOrEntityId(q.roomId);
+    const safeRoomId = resolveJoinedRoomId(q.roomId);
     if (!safeRoomId) return;
-    io.to(safeRoomId).emit('question_update', [q]);
+    const room = rooms.get(safeRoomId);
+    if (room) {
+      if (!Array.isArray(room.questions)) room.questions = [];
+      room.questions = [q as unknown as StudioQuestion, ...room.questions.filter((item) => item.id !== q.id)].slice(0, 50);
+      pushDvrEvent(safeRoomId, 'question', q);
+      io.to(safeRoomId).emit('question_update', room.questions);
+    } else {
+      io.to(safeRoomId).emit('question_update', [q]);
+    }
   });
 
   socket.on('upvote_question', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
     for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room && Array.isArray(room.questions)) {
+        const questionId = String(raw.questionId || '');
+        const voterId = String(raw.userId || socketUser.uid);
+        room.questions = room.questions.map((q) => {
+          if (q.id !== questionId) return q;
+          const upvotes = Array.isArray(q.upvotes) ? q.upvotes : [];
+          const nextUpvotes = upvotes.includes(voterId)
+            ? upvotes.filter((u) => u !== voterId)
+            : [...upvotes, voterId];
+          return { ...q, upvotes: nextUpvotes };
+        });
+      }
       io.to(rId).emit('question_voted', payload);
     }
   });
 
   socket.on('answer_question', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
     for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room && Array.isArray(room.questions)) {
+        const questionId = String(raw.questionId || '');
+        room.questions = room.questions.map((q) =>
+          q.id === questionId ? { ...q, isAnswered: true } : q
+        );
+      }
       io.to(rId).emit('question_answered', payload);
     }
   });
@@ -1900,7 +3461,17 @@ io.on('connection', (socket: Socket) => {
   // Google Meet Host Controls
   socket.on('update_host_controls', (payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
+    const raw = payload as Record<string, unknown>;
     for (const rId of joinedRooms) {
+      const room = rooms.get(rId);
+      if (room) {
+        if (typeof raw.useChalkboardAllowed === 'boolean') {
+          room.useChalkboardAllowed = raw.useChalkboardAllowed;
+        }
+        if (typeof raw.turnMicAllowed === 'boolean') {
+          room.turnMicAllowed = raw.turnMicAllowed;
+        }
+      }
       io.to(rId).emit('host_controls_update', payload);
     }
   });
@@ -1918,9 +3489,39 @@ io.on('connection', (socket: Socket) => {
         room.participants.forEach((p) => {
           p.handRaised = false;
         });
+        io.to(rId).emit('hand_lowered', { all: true });
         broadcastParticipants(room);
       }
     }
+  });
+
+  socket.on('end_session', async (payload: unknown) => {
+    if (!socketControlLimiter.allow(socket.id).allowed) {
+      socket.emit('error_notice', { error: 'Rate limit exceeded for end_session' });
+      return;
+    }
+    const raw = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const safeRoomId = sanitizeRoomOrEntityId(raw.roomId) || resolveJoinedRoomId(raw.roomId);
+    if (!safeRoomId) return;
+
+    const room = rooms.get(safeRoomId);
+    if (!room) return;
+
+    const self = findSelf(room);
+    const userId = socketUser.uid || self?.id;
+    const isAuthorized =
+      socketUser.role === 'lecturer' ||
+      self?.role === 'lecturer' ||
+      (Boolean(room.hostUserId) && (userId === room.hostUserId || socketUser.uid === room.hostUserId)) ||
+      (Boolean(room.lecturerId) && (userId === room.lecturerId || socketUser.uid === room.lecturerId)) ||
+      safeRoomId === TRIAL_ROOM_ID;
+
+    if (!isAuthorized) {
+      socket.emit('error_notice', { error: 'Only the lecturer can end the studio session.' });
+      return;
+    }
+
+    await endAndFinalizeRoom(safeRoomId, socketUser.name || self?.name || room.lecturerName);
   });
 
   socket.on('disconnect', () => {

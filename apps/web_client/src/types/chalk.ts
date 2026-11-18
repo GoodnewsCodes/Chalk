@@ -28,6 +28,7 @@ export interface StrokeData {
   width: number;
   points: VectorPoint[];
   slideIndex?: number;
+  isComplete?: boolean;
 }
 
 export interface LaserPointer {
@@ -48,6 +49,7 @@ export interface UserProfile {
   matricOrStaffId: string;
   avatarTag: string;
   isProfileComplete: boolean;
+  isDemo?: boolean;
 }
 
 export interface CourseMember {
@@ -312,15 +314,7 @@ export interface ChatMessage {
   isTutorBot?: boolean;
 }
 
-export interface DvrChapter {
-  timestampMs?: number;
-  timeMs?: number; // compat alias
-  title?: string;
-  label?: string;
-  slideIndex: number;
-}
-
-export interface DvrReplayItem {
+export interface CatchUpSessionItem {
   id: string;
   roomId?: string;
   courseId?: string;
@@ -330,17 +324,39 @@ export interface DvrReplayItem {
   recordedAt: string;
   endedAt?: string;
   durationMs: number;
-  totalEvents?: number;
   strokeCount?: number;
   chatCount?: number;
   participantCount?: number;
-  attendeeIds?: string[];
-  totalSizeKb: number;
-  eventsSizeKb?: number;
-  mp4EquivalentMb: number;
-  savingsPercent: number;
-  chapters: DvrChapter[];
-  events: { t: number; type?: string; data?: any; stroke: StrokeData }[];
+  aiSummary?: AiCatchUpSummary;
+  aiError?: string;
+  aiErrorCode?: string;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  roomId?: string;
+  speakerId?: string;
+  speakerName: string;
+  speakerRole: 'lecturer' | 'student';
+  text: string;
+  timestamp: number;
+  offsetMs: number;
+}
+
+export interface AiCatchUpWalkthroughItem {
+  timeRange: string;
+  title: string;
+  summary: string;
+  slideIndex?: number;
+}
+
+export interface AiCatchUpSummary {
+  overview: string;
+  takeaways: string[];
+  walkthrough: AiCatchUpWalkthroughItem[];
+  keyConceptsOrFormulas: string[];
+  generatedAtIso: string;
+  isEmptySession?: boolean;
 }
 
 export interface CatchUpSegment {
@@ -357,6 +373,7 @@ export interface CatchUpData {
   roomId: string;
   title: string;
   courseCode: string;
+  courseId?: string;
   lecturerName: string;
   isLive: boolean;
   sessionStartedAt: number;
@@ -367,9 +384,15 @@ export interface CatchUpData {
   activeSlideIndex: number;
   totalSlides: number;
   segments: CatchUpSegment[];
-  slides: { slideIndex: number; strokeCount: number; contributors: string[] }[];
+  slides: { slideIndex: number; strokeCount: number; contributors: string[]; tools?: string[] }[];
   lecturerMessages: ChatMessage[];
   recentMessages: ChatMessage[];
+  transcript?: TranscriptSegment[];
+  polls?: StudioPoll[];
+  questions?: StudioQuestion[];
+  aiSummary?: AiCatchUpSummary;
+  aiError?: string;
+  aiErrorCode?: string;
 }
 
 export interface QuizQuestionModel {
@@ -392,6 +415,33 @@ export interface QuizModel {
   myAttempts: number;
   attemptCount?: number;
   averageScore?: number | null;
+}
+
+export interface FlashcardItem {
+  id: string;
+  courseId: string;
+  topic: string;
+  front: string;
+  back: string;
+  hint?: string;
+}
+
+export interface ConceptAnimationStep {
+  label: string;
+  formula?: string;
+  description: string;
+  highlightNodes?: string[];
+  activeEdges?: string[];
+  values?: Record<string, string | number>;
+}
+
+export interface ConceptAnimationModel {
+  id: string;
+  courseId: string;
+  title: string;
+  category: string;
+  visualType: 'dijkstra' | 'ssa_cfg' | 'gauss_seidel' | 'custom_pipeline';
+  steps: ConceptAnimationStep[];
 }
 
 export interface BenchmarkMetrics {

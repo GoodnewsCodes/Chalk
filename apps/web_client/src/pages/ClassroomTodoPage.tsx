@@ -18,13 +18,33 @@ export const ClassroomTodoPage: React.FC = () => {
   const [teacherTab, setTeacherTab] = useState<'to_review' | 'reviewed'>('to_review');
   const [selectedCourseId, setSelectedCourseId] = useState<string>('all');
 
-  const activeCourses = courses.filter((c) => !c.isArchived);
+  const activeCourses = courses.filter((c) => {
+    if (c.isArchived || !currentUser) return false;
+    if (isLecturer) {
+      return (
+        c.lecturerId === currentUser.id ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(c.members?.some((m) => m.id === currentUser.id && m.role === 'lecturer'))
+      );
+    }
+    return (
+      Boolean(
+        c.members?.some(
+          (m) =>
+            m.id === currentUser.id ||
+            (Boolean(m.matricOrStaffId) &&
+              Boolean(currentUser.matricOrStaffId) &&
+              m.matricOrStaffId === currentUser.matricOrStaffId)
+        )
+      ) || Boolean(c.memberIds?.includes(currentUser.id))
+    );
+  });
 
-  // Filter assignments by course
+  // Filter assignments by user's role-scoped courses
   const filteredAssignments = assignments.filter((a) => {
     if (selectedCourseId !== 'all' && a.courseId !== selectedCourseId) return false;
-    const c = courses.find((course) => course.id === a.courseId);
-    return c && !c.isArchived;
+    return activeCourses.some((course) => course.id === a.courseId);
   });
 
   // Student partition
@@ -84,9 +104,8 @@ export const ClassroomTodoPage: React.FC = () => {
         <select
           value={selectedCourseId}
           onChange={(e) => setSelectedCourseId(e.target.value)}
-          className={`px-3.5 py-2 rounded-xl border text-xs font-medium focus:outline-none cursor-pointer ${
-            isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-          }`}
+          className={`px-3.5 py-2 rounded-xl border text-xs font-medium focus:outline-none cursor-pointer ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+            }`}
         >
           <option value="all">All classes</option>
           {activeCourses.map((c) => (
@@ -102,21 +121,19 @@ export const ClassroomTodoPage: React.FC = () => {
         <div className="flex items-center gap-2 border-b border-black/10 dark:border-white/10 text-sm font-medium">
           <button
             onClick={() => setTeacherTab('to_review')}
-            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${
-              teacherTab === 'to_review'
+            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${teacherTab === 'to_review'
                 ? 'border-[#059669] text-[#059669] dark:text-[#69DB7C] dark:border-[#69DB7C]'
                 : 'border-transparent text-black/60 dark:text-white/60'
-            }`}
+              }`}
           >
             To review ({toReviewList.length})
           </button>
           <button
             onClick={() => setTeacherTab('reviewed')}
-            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${
-              teacherTab === 'reviewed'
+            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${teacherTab === 'reviewed'
                 ? 'border-[#059669] text-[#059669] dark:text-[#69DB7C] dark:border-[#69DB7C]'
                 : 'border-transparent text-black/60 dark:text-white/60'
-            }`}
+              }`}
           >
             Reviewed ({reviewedList.length})
           </button>
@@ -125,31 +142,28 @@ export const ClassroomTodoPage: React.FC = () => {
         <div className="flex items-center gap-2 border-b border-black/10 dark:border-white/10 text-sm font-medium">
           <button
             onClick={() => setStudentTab('assigned')}
-            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${
-              studentTab === 'assigned'
+            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${studentTab === 'assigned'
                 ? 'border-[#059669] text-[#059669] dark:text-[#69DB7C] dark:border-[#69DB7C]'
                 : 'border-transparent text-black/60 dark:text-white/60'
-            }`}
+              }`}
           >
             Assigned ({assignedList.length})
           </button>
           <button
             onClick={() => setStudentTab('missing')}
-            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${
-              studentTab === 'missing'
+            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${studentTab === 'missing'
                 ? 'border-[#059669] text-[#059669] dark:text-[#69DB7C] dark:border-[#69DB7C]'
                 : 'border-transparent text-black/60 dark:text-white/60'
-            }`}
+              }`}
           >
             Missing ({missingList.length})
           </button>
           <button
             onClick={() => setStudentTab('done')}
-            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${
-              studentTab === 'done'
+            className={`pb-3 px-4 border-b-2 cursor-pointer transition-all ${studentTab === 'done'
                 ? 'border-[#059669] text-[#059669] dark:text-[#69DB7C] dark:border-[#69DB7C]'
                 : 'border-transparent text-black/60 dark:text-white/60'
-            }`}
+              }`}
           >
             Done ({doneList.length})
           </button>
@@ -171,18 +185,17 @@ export const ClassroomTodoPage: React.FC = () => {
                   <Link
                     key={asg.id}
                     to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                    className={`p-5 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-[#059669] dark:hover:border-[#69DB7C] ${
-                      isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                    }`}
+                    className={`p-5 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-[#059669] dark:hover:border-[#69DB7C] ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                      }`}
                   >
                     <div>
-                      <div className="text-xs font-mono font-medium text-[#059669] dark:text-[#69DB7C]">
+                      <div className="text-xs font-medium text-[#059669] dark:text-[#69DB7C]">
                         {c?.code || 'Course'} • Due: {asg.dueDate}
                       </div>
                       <h3 className="text-base font-medium mt-1">{asg.title}</h3>
                     </div>
 
-                    <div className="flex items-center gap-4 text-xs font-mono shrink-0">
+                    <div className="flex items-center gap-4 text-xs shrink-0">
                       <div className="text-center">
                         <div className="text-lg font-bold text-blue-500">{turnedIn}</div>
                         <div className="text-[10px] opacity-60">Turned in</div>
@@ -209,12 +222,11 @@ export const ClassroomTodoPage: React.FC = () => {
                   <Link
                     key={asg.id}
                     to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 ${
-                      isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                    }`}
+                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                      }`}
                   >
                     <div>
-                      <div className="text-xs font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                      <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                         {c?.code} • Completed
                       </div>
                       <h3 className="text-base font-medium mt-1">{asg.title}</h3>
@@ -239,19 +251,18 @@ export const ClassroomTodoPage: React.FC = () => {
                   <Link
                     key={asg.id}
                     to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 transition-all hover:border-[#059669] dark:hover:border-[#69DB7C] ${
-                      isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                    }`}
+                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 transition-all hover:border-[#059669] dark:hover:border-[#69DB7C] ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                      }`}
                   >
                     <div>
-                      <div className="text-xs font-mono font-medium text-[#059669] dark:text-[#69DB7C]">
+                      <div className="text-xs font-medium text-[#059669] dark:text-[#69DB7C]">
                         {c?.code} • {asg.dueDate}
                       </div>
                       <h3 className="text-base font-medium mt-1">{asg.title}</h3>
                       <p className="text-xs opacity-60 mt-0.5 line-clamp-1">{asg.description}</p>
                     </div>
 
-                    <div className="flex items-center gap-2 font-mono text-xs opacity-70 shrink-0">
+                    <div className="flex items-center gap-2 text-xs opacity-70 shrink-0">
                       <span>{asg.points}</span>
                       <ArrowRight size={16} />
                     </div>
@@ -269,12 +280,11 @@ export const ClassroomTodoPage: React.FC = () => {
                 <Link
                   key={asg.id}
                   to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                  className={`p-5 rounded-3xl border flex items-center justify-between gap-4 border-red-500/30 ${
-                    isDark ? 'bg-red-950/10' : 'bg-red-50/50'
-                  }`}
+                  className={`p-5 rounded-3xl border flex items-center justify-between gap-4 border-red-500/30 ${isDark ? 'bg-red-950/10' : 'bg-red-50/50'
+                    }`}
                 >
                   <div>
-                    <div className="text-xs font-mono font-medium text-red-500">
+                    <div className="text-xs font-medium text-red-500">
                       Missing • Past Due
                     </div>
                     <h3 className="text-base font-medium mt-1">{asg.title}</h3>
@@ -297,12 +307,11 @@ export const ClassroomTodoPage: React.FC = () => {
                   <Link
                     key={asg.id}
                     to={`/hub/course/${asg.courseId}/assignment/${asg.id}`}
-                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 ${
-                      isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
-                    }`}
+                    className={`p-5 rounded-3xl border flex items-center justify-between gap-4 ${isDark ? 'bg-[#141E19] border-[#3C4043]' : 'bg-white border-[#DADCE0]'
+                      }`}
                   >
                     <div>
-                      <div className="text-xs font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                      <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                         {sub?.status === 'graded'
                           ? `Graded: ${sub.grade}/${sub.maxPoints}`
                           : 'Turned in'}

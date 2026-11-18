@@ -11,7 +11,6 @@ import {
   SlidersHorizontal,
   Eraser,
   ChartBar,
-  Desktop,
   VideoCamera,
   CheckCircle,
   MicrophoneSlash,
@@ -20,16 +19,18 @@ import {
   SignIn,
   X,
 } from '@phosphor-icons/react';
-import { ThemePreference, useApp } from '../context/AppContext';
+import { useApp } from '../context/AppContext';
+import { ThemeToggle } from '../components/ThemeToggle';
 import { VectorCanvas } from '../components/VectorCanvas';
 import { DEFAULT_BOARD_STROKES } from '../data/mockCatalog';
 import { StrokeData } from '../types/chalk';
+import { ChalkLogo } from '../components/ChalkLogo';
 
 export const LandingPage: React.FC = () => {
   const {
     isDark,
-    themePreference,
-    setThemePreference,
+    isDemoMode,
+    courses,
     currentUser,
     isAuthenticated,
     guestName,
@@ -38,7 +39,43 @@ export const LandingPage: React.FC = () => {
   } = useApp();
   const navigate = useNavigate();
 
-  const [roomInput, setRoomInput] = useState('csc401-algo');
+  const isRealUser = Boolean(currentUser && !isDemoMode);
+  const isLecturer = currentUser?.role === 'lecturer';
+  const uidLower = (currentUser?.id || '').toLowerCase();
+  const myTeachingCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      ((c.lecturerId || '').toLowerCase() === uidLower ||
+        (Boolean(currentUser.name) &&
+          c.lecturerName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        Boolean(
+          c.members?.some(
+            (m) => (m.id || '').toLowerCase() === uidLower && m.role === 'lecturer'
+          )
+        ))
+  );
+  const myEnrolledCourses = courses.filter(
+    (c) =>
+      !c.isArchived &&
+      currentUser &&
+      (Boolean(c.memberIds?.some((id) => id.toLowerCase() === uidLower)) ||
+        Boolean(
+          c.members?.some(
+            (m) =>
+              (m.id || '').toLowerCase() === uidLower ||
+              (Boolean(m.matricOrStaffId) &&
+                Boolean(currentUser.matricOrStaffId) &&
+                m.matricOrStaffId === currentUser.matricOrStaffId)
+          )
+        ))
+  );
+  const roleScopedCourses = isLecturer ? myTeachingCourses : myEnrolledCourses;
+  const fallbackHubTarget = isLecturer ? '/hub?create=1' : '/hub?join=1';
+
+  const [roomInput, setRoomInput] = useState(
+    isRealUser ? roleScopedCourses[0]?.liveRoomCode || '' : 'csc401-algo'
+  );
   const [weeklyHours, setWeeklyHours] = useState<number>(12);
   const [heroStrokes, setHeroStrokes] = useState<StrokeData[]>(DEFAULT_BOARD_STROKES);
   const [heroColor, setHeroColor] = useState<string>('#69DB7C');
@@ -51,13 +88,36 @@ export const LandingPage: React.FC = () => {
   const [prejoinMicMuted, setPrejoinMicMuted] = useState<boolean>(true);
 
   const openLiveClassTransition = (code = 'csc401-algo') => {
+    if (isRealUser) {
+      if (roleScopedCourses.length === 0) {
+        navigate(fallbackHubTarget);
+        return;
+      }
+      const targetCode =
+        code && code !== 'csc401-algo'
+          ? code.trim()
+          : roleScopedCourses[0].liveRoomCode;
+      setPendingLiveRoom(targetCode);
+      return;
+    }
     const cleaned = code.trim() || 'csc401-algo';
     setPendingLiveRoom(cleaned);
   };
 
   const handleLaunchLiveClass = (e: React.FormEvent) => {
     e.preventDefault();
-    const targetRoom = pendingLiveRoom || 'csc401-algo';
+    if (isRealUser && roleScopedCourses.length === 0) {
+      setPendingLiveRoom(null);
+      navigate(fallbackHubTarget);
+      return;
+    }
+    const targetRoom =
+      pendingLiveRoom ||
+      (isRealUser ? roleScopedCourses[0]?.liveRoomCode || '' : 'csc401-algo');
+    if (!targetRoom) {
+      navigate(fallbackHubTarget);
+      return;
+    }
     if (!isAuthenticated && prejoinGuestName.trim()) {
       setGuestName(prejoinGuestName.trim());
     }
@@ -71,7 +131,13 @@ export const LandingPage: React.FC = () => {
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleaned = roomInput.trim() || 'csc401-algo';
+    if (isRealUser && roleScopedCourses.length === 0) {
+      navigate(fallbackHubTarget);
+      return;
+    }
+    const cleaned =
+      roomInput.trim() ||
+      (isRealUser ? roleScopedCourses[0]?.liveRoomCode || '' : 'csc401-algo');
     openLiveClassTransition(cleaned);
   };
 
@@ -100,20 +166,8 @@ export const LandingPage: React.FC = () => {
           }`}
       >
         <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2.5 shrink-0">
-            <div
-              className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark
-                ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
-                : 'bg-[#ECFDF5] text-[#059669]'
-                }`}
-            >
-              <ChalkboardTeacher size={20} weight="regular" />
-            </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-display font-medium tracking-tight text-xl">
-                Chalk
-              </span>
-            </div>
+          <Link to="/" className="flex items-center gap-2.5 shrink-0 py-1">
+            <ChalkLogo className="h-11 w-auto" />
           </Link>
 
           {/* Desktop Anchor Links */}
@@ -158,70 +212,42 @@ export const LandingPage: React.FC = () => {
             >
               Student Stories
             </a>
+            <Link
+              to="/faq"
+              className={
+                isDark
+                  ? 'text-[#9AA0A6] hover:text-[#E3E3E3]'
+                  : 'text-[#5F6368] hover:text-[#202124]'
+              }
+            >
+              FAQ
+            </Link>
           </nav>
 
-          {/* Right Controls: Appearance Select + Sign In + Open Classroom CTA */}
+          {/* Right Controls: FAQ (mobile/tablet) + Appearance Toggle + Sign In + Open Classroom CTA */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <div
-              className={`hidden sm:inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs ${isDark
-                ? 'bg-[#141E19] border-[#3C4043] text-[#E3E3E3]'
-                : 'bg-[#F8F9FA] border-[#DADCE0] text-[#202124]'
+            <Link
+              to="/faq"
+              className={`lg:hidden px-3 py-1.5 rounded-full text-xs font-medium ${isDark
+                ? 'text-[#9AA0A6] hover:text-[#E3E3E3] hover:bg-white/10'
+                : 'text-[#5F6368] hover:text-[#202124] hover:bg-black/5'
                 }`}
             >
-              <Desktop size={14} weight="regular" className="opacity-65" />
-              <select
-                aria-label="Appearance theme"
-                value={themePreference}
-                onChange={(e) =>
-                  setThemePreference(e.target.value as ThemePreference)
-                }
-                className="bg-transparent font-medium focus:outline-none cursor-pointer"
-              >
-                <option value="light" className="bg-white text-[#202124]">
-                  Light
-                </option>
-                <option value="dark" className="bg-[#141E19] text-[#E3E3E3]">
-                  Dark
-                </option>
-                <option value="system" className="bg-white text-[#202124]">
-                  System
-                </option>
-              </select>
-            </div>
+              FAQ
+            </Link>
+            <ThemeToggle />
 
             {isAuthenticated && currentUser ? (
-              <>
-                <Link
-                  to="/auth"
-                  className={`btn-google px-3.5 py-2 rounded-full text-sm font-medium inline-flex items-center gap-2 ${isDark
-                    ? 'text-[#69DB7C] hover:bg-[#69DB7C]/10'
-                    : 'text-[#059669] hover:bg-[#ECFDF5]/60'
-                    }`}
-                >
-                  <span
-                    className={`w-6 h-6 rounded-full font-mono text-[11px] flex items-center justify-center ${isDark
-                      ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
-                      : 'bg-[#ECFDF5] text-[#059669]'
-                      }`}
-                  >
-                    {currentUser.avatarTag}
-                  </span>
-                  <span className="hidden sm:inline">
-                    {currentUser.name.split(' ')[0]}
-                  </span>
-                </Link>
-
-                <Link
-                  to="/hub"
-                  className={`btn-google px-5 py-2.5 rounded-full text-sm font-medium inline-flex items-center gap-2 ${isDark
-                    ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
-                    : 'bg-[#059669] text-white hover:bg-[#047857]'
-                    }`}
-                >
-                  <span>Open Dashboard</span>
-                  <ArrowRight size={15} weight="regular" />
-                </Link>
-              </>
+              <Link
+                to="/hub"
+                className={`btn-google px-5 py-2.5 rounded-full text-sm font-medium inline-flex items-center gap-2 ${isDark
+                  ? 'bg-[#69DB7C] text-[#0F1713] hover:bg-[#51CF66]'
+                  : 'bg-[#059669] text-white hover:bg-[#047857]'
+                  }`}
+              >
+                <span>Open Dashboard</span>
+                <ArrowRight size={15} weight="regular" />
+              </Link>
             ) : (
               <>
                 <Link
@@ -299,7 +325,7 @@ export const LandingPage: React.FC = () => {
                     }`}
                 >
                   <VideoCamera size={18} weight="regular" />
-                  <span>Try a live class</span>
+                  <span>Start a Demo class</span>
                 </button>
 
                 <form
@@ -321,7 +347,7 @@ export const LandingPage: React.FC = () => {
                       value={roomInput}
                       onChange={(e) => setRoomInput(e.target.value)}
                       placeholder="Enter class code (e.g. csc401-algo)"
-                      className="w-full bg-transparent font-mono text-sm focus:outline-none"
+                      className="w-full bg-transparent text-sm focus:outline-none"
                     />
                   </div>
                   <button
@@ -360,7 +386,7 @@ export const LandingPage: React.FC = () => {
                     <span>Live Class • CSC 401 Algorithms</span>
                   </div>
                   <span
-                    className={`px-2.5 py-0.5 rounded-full font-mono text-[11px] font-medium inline-flex items-center gap-1.5 ${isDark
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium inline-flex items-center gap-1.5 ${isDark
                       ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
                       : 'bg-[#ECFDF5] text-[#059669]'
                       }`}
@@ -448,7 +474,7 @@ export const LandingPage: React.FC = () => {
         </section>
 
         {/* 3. Academic Logo Wall Under Hero */}
-        <section
+        {/*  <section
           aria-label="Partner Universities and Research Cohorts"
           className={`py-8 border-y ${isDark
             ? 'bg-[#141E19]/40 border-[#3C4043]/50 text-[#9AA0A6]'
@@ -485,19 +511,14 @@ export const LandingPage: React.FC = () => {
               <text x="38" y="23" fontFamily="Google Sans, Plus Jakarta Sans, sans-serif" fontWeight="600" fontSize="15" letterSpacing="1">UON NAIROBI</text>
             </svg>
           </div>
-        </section>
+        </section>  */}
 
         {/* 4. Everyday Mobile Data Savings Calculator */}
         <section
           id="calculator"
           className="py-20 lg:py-28 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full"
         >
-          <div
-            className={`rounded-3xl p-8 sm:p-12 border ${isDark
-              ? 'bg-[#141E19] border-[#3C4043]/60'
-              : 'bg-[#F8F9FA] border-[#DADCE0]'
-              }`}
-          >
+          <div className="rounded-3xl p-8 sm:p-12">
             <div className="max-w-2xl mb-10">
               <h2 className="font-display text-3xl sm:text-4xl font-medium tracking-[-0.02em]">
                 Spend less on mobile data every week
@@ -522,7 +543,7 @@ export const LandingPage: React.FC = () => {
                     <span>Hours of class per week</span>
                   </label>
                   <span
-                    className={`px-3.5 py-1 rounded-full font-mono text-sm font-medium tabular-nums ${isDark
+                    className={`px-3.5 py-1 rounded-full text-sm font-medium tabular-nums ${isDark
                       ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
                       : 'bg-[#ECFDF5] text-[#059669]'
                       }`}
@@ -544,7 +565,7 @@ export const LandingPage: React.FC = () => {
                 />
 
                 <div
-                  className={`flex justify-between text-xs font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                  className={`flex justify-between text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                     }`}
                 >
                   <span>2 hrs</span>
@@ -663,11 +684,7 @@ export const LandingPage: React.FC = () => {
 
             <div className="lg:col-span-6">
               <div
-                className={`rounded-3xl border p-6 grid grid-cols-1 sm:grid-cols-2 gap-4 ${isDark
-                  ? 'bg-[#141E19] border-[#3C4043]/70'
-                  : 'bg-[#F8F9FA] border-[#DADCE0]'
-                  }`}
-              >
+                className="rounded-3xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Left Comparison Card: Regular Video */}
                 <div
                   className={`p-5 rounded-2xl border flex flex-col justify-between space-y-4 ${isDark
@@ -688,7 +705,7 @@ export const LandingPage: React.FC = () => {
                   </div>
 
                   <div
-                    className={`p-4 rounded-xl border text-center font-mono text-sm select-none blur-[2px] opacity-50 ${isDark
+                    className={`p-4 rounded-xl border text-center text-sm select-none blur-[1.2px] opacity-70 ${isDark
                       ? 'bg-[#141E19] border-[#3C4043]'
                       : 'bg-[#F8F9FA] border-[#DADCE0]'
                       }`}
@@ -697,7 +714,7 @@ export const LandingPage: React.FC = () => {
                   </div>
 
                   <div
-                    className={`text-xs font-mono ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
+                    className={`text-xs ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                       }`}
                   >
                     Uses ~540 MB every hour
@@ -724,7 +741,7 @@ export const LandingPage: React.FC = () => {
                   </div>
 
                   <div
-                    className={`p-4 rounded-xl border text-center font-mono text-sm font-medium ${isDark
+                    className={`p-4 rounded-xl border text-center text-sm font-medium ${isDark
                       ? 'bg-[#0F1713] border-[#69DB7C]/40 text-[#69DB7C]'
                       : 'bg-white border-[#059669]/30 text-[#059669]'
                       }`}
@@ -733,7 +750,7 @@ export const LandingPage: React.FC = () => {
                   </div>
 
                   <div
-                    className={`text-xs font-mono font-medium ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
+                    className={`text-xs font-medium ${isDark ? 'text-[#69DB7C]' : 'text-[#059669]'
                       }`}
                   >
                     Uses only ~13 MB per hour
@@ -879,7 +896,7 @@ export const LandingPage: React.FC = () => {
                   <div className="w-10 h-10 rounded-2xl bg-[#69DB7C]/20 text-[#69DB7C] flex items-center justify-center">
                     <ChalkboardTeacher size={22} weight="regular" />
                   </div>
-                  <span className="px-3 py-1 rounded-full bg-[#69DB7C]/20 text-[#69DB7C] font-mono text-[11px] font-medium">
+                  <span className="px-3 py-1 rounded-full bg-[#69DB7C]/20 text-[#69DB7C] text-[11px] font-medium">
                     Instant Trial Available
                   </span>
                 </div>
@@ -891,7 +908,7 @@ export const LandingPage: React.FC = () => {
                 </p>
               </div>
               <div className="relative z-10 mt-8 inline-flex items-center gap-2 text-sm font-medium text-[#69DB7C]">
-                <span>Try a live sample class</span>
+                <span>Try a Demo class</span>
                 <ArrowRight size={16} weight="regular" />
               </div>
             </button>
@@ -916,7 +933,7 @@ export const LandingPage: React.FC = () => {
                   </div>
                   {!isAuthenticated && (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-medium ${isDark
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-medium ${isDark
                         ? 'bg-white/10 text-[#E3E3E3]'
                         : 'bg-black/5 text-[#5F6368]'
                         }`}
@@ -949,9 +966,9 @@ export const LandingPage: React.FC = () => {
               </div>
             </Link>
 
-            {/* Cell 3: Recorded Replays */}
+            {/* Cell 3: AI Catch Up */}
             <Link
-              to="/replays"
+              to="/catch-up"
               className={`hover-lift md:col-span-4 group rounded-3xl p-7 border flex flex-col justify-between ${isDark
                 ? 'bg-[#141E19] border-[#3C4043]/70'
                 : 'bg-[#F8F9FA] border-[#DADCE0]'
@@ -969,7 +986,7 @@ export const LandingPage: React.FC = () => {
                   </div>
                   {!isAuthenticated && (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-mono text-[10px] ${isDark
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] ${isDark
                         ? 'bg-white/5 text-[#9AA0A6]'
                         : 'bg-black/5 text-[#5F6368]'
                         }`}
@@ -980,13 +997,13 @@ export const LandingPage: React.FC = () => {
                   )}
                 </div>
                 <h3 className="font-display text-xl font-medium">
-                  Download 1-hour classes in 11 MB
+                  AI Catch Up syntheses
                 </h3>
                 <p
                   className={`text-sm leading-relaxed ${isDark ? 'text-[#9AA0A6]' : 'text-[#5F6368]'
                     }`}
                 >
-                  Save full recorded lessons to your phone for offline exam revision without filling up your storage.
+                  Catch up on missed classes with Chalk AI summaries, key takeaways, chronological walkthroughs, and interactive Q&amp;A.
                 </p>
               </div>
               <div
@@ -995,8 +1012,8 @@ export const LandingPage: React.FC = () => {
               >
                 <span>
                   {isAuthenticated
-                    ? 'Watch recorded classes'
-                    : 'Sign in to watch replays'}
+                    ? 'Open AI Catch Up'
+                    : 'Sign in for AI Catch Up'}
                 </span>
                 <ArrowRight size={14} weight="regular" />
               </div>
@@ -1022,7 +1039,7 @@ export const LandingPage: React.FC = () => {
                   </div>
                   {!isAuthenticated && (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-mono text-[10px] ${isDark
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] ${isDark
                         ? 'bg-white/5 text-[#9AA0A6]'
                         : 'bg-black/5 text-[#5F6368]'
                         }`}
@@ -1075,7 +1092,7 @@ export const LandingPage: React.FC = () => {
                   </div>
                   {!isAuthenticated && (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-mono text-[10px] ${isDark
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] ${isDark
                         ? 'bg-white/5 text-[#9AA0A6]'
                         : 'bg-black/5 text-[#5F6368]'
                         }`}
@@ -1131,7 +1148,7 @@ export const LandingPage: React.FC = () => {
               </p>
               <footer className="mt-6 flex items-center gap-3.5">
                 <div
-                  className={`w-10 h-10 rounded-full font-mono font-medium text-xs flex items-center justify-center ${isDark
+                  className={`w-10 h-10 rounded-full font-medium text-xs flex items-center justify-center ${isDark
                     ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}
@@ -1161,7 +1178,7 @@ export const LandingPage: React.FC = () => {
               </p>
               <footer className="mt-6 flex items-center gap-3.5">
                 <div
-                  className={`w-10 h-10 rounded-full font-mono font-medium text-xs flex items-center justify-center ${isDark
+                  className={`w-10 h-10 rounded-full font-medium text-xs flex items-center justify-center ${isDark
                     ? 'bg-[#69DB7C]/20 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}
@@ -1261,13 +1278,14 @@ export const LandingPage: React.FC = () => {
       >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
           <div className="flex items-center gap-2.5">
-            <span className="font-display font-medium text-sm text-current">
-              Chalk
-            </span>
+            <ChalkLogo className="h-8 w-auto" />
             <span>•</span>
             <span>Low-Data Virtual Classroom</span>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-6 font-medium">
+            <Link to="/faq" className="hover:underline">
+              FAQ
+            </Link>
             <button
               type="button"
               onClick={() => openLiveClassTransition('csc401-algo')}
@@ -1280,8 +1298,8 @@ export const LandingPage: React.FC = () => {
                 <Link to="/hub" className="hover:underline">
                   Classroom Hub
                 </Link>
-                <Link to="/replays" className="hover:underline">
-                  Recorded Classes
+                <Link to="/catch-up" className="hover:underline">
+                  AI Catch Up
                 </Link>
                 <Link to="/study" className="hover:underline">
                   Study Notes
@@ -1316,7 +1334,7 @@ export const LandingPage: React.FC = () => {
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] font-medium ${isDark
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium ${isDark
                     ? 'bg-[#69DB7C]/15 text-[#69DB7C]'
                     : 'bg-[#ECFDF5] text-[#059669]'
                     }`}

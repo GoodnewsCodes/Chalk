@@ -41,6 +41,33 @@ export interface ChatMessageRecord {
   timestamp: number; // epoch ms
 }
 
+export interface TranscriptEntry {
+  id: string;
+  roomId: string;
+  speakerId: string;
+  speakerName: string;
+  speakerRole: 'lecturer' | 'student';
+  text: string;
+  timestamp: number; // epoch ms
+  offsetMs: number; // ms since sessionStartedAt
+}
+
+export interface AiCatchUpWalkthroughItem {
+  timeRange: string;
+  title: string;
+  summary: string;
+  slideIndex?: number;
+}
+
+export interface AiCatchUpSummary {
+  overview: string;
+  takeaways: string[];
+  walkthrough: AiCatchUpWalkthroughItem[];
+  keyConceptsOrFormulas: string[];
+  generatedAtIso: string;
+  isEmptySession?: boolean;
+}
+
 /**
  * A live connection inside a meeting. Keyed by socketId because every socket is
  * a distinct WebRTC peer (the same user may join from two tabs/devices).
@@ -64,9 +91,13 @@ export interface RoomState {
   id: string;
   title: string;
   lecturerName: string;
+  hostUserId?: string;
+  lecturerId?: string;
   courseCode: string;
   courseId?: string;
   stageLayout?: string;
+  useChalkboardAllowed?: boolean;
+  turnMicAllowed?: boolean;
   strokes: StrokeDelta[];
   activeSlideIndex: number;
   totalSlides: number;
@@ -74,6 +105,9 @@ export interface RoomState {
   sessionStartedAt: number;
   participants: RoomParticipant[];
   chat: ChatMessageRecord[];
+  transcript: TranscriptEntry[];
+  polls: StudioPoll[];
+  questions: StudioQuestion[];
   /** Every user id that took part in the current session (for replay access). */
   attendeeIds: string[];
   peakParticipants: number;
@@ -81,7 +115,7 @@ export interface RoomState {
 
 export interface DvrEvent {
   t: number; // Offset in ms from recording start
-  type: 'snapshot' | 'stroke' | 'remove' | 'clear' | 'slide_change' | 'chat';
+  type: 'snapshot' | 'stroke' | 'remove' | 'clear' | 'slide_change' | 'chat' | 'transcript' | 'poll' | 'question';
   data: any;
 }
 
@@ -115,6 +149,7 @@ export interface DvrRecording {
   savingsPercentage?: number;
   chapters: DvrChapter[];
   events: DvrEvent[];
+  aiSummary?: AiCatchUpSummary;
 }
 
 export interface AiSummaryResponse {
@@ -222,3 +257,13 @@ export interface FloatingReaction {
   x: number;
   senderName: string;
 }
+
+export interface FlashcardItem {
+  id: string;
+  courseId: string;
+  topic: string;
+  front: string;
+  back: string;
+  hint?: string;
+}
+
